@@ -173,6 +173,26 @@ h2 { margin: 0; font-size: 18px; }
 .slot.picked { border-color: var(--select); box-shadow: 0 0 0 2px var(--select); }
 .slot.found { border-color: var(--shiny); box-shadow: 0 0 0 2px var(--shiny); }
 .slot.locked { opacity: .55; }
+/* the party: a column at the left of the game's box (see the side-by-side layout for its sizing) */
+.party[hidden] { display: none !important; }
+.party { display: flex; flex-direction: column; min-width: 0; }
+.party-head { display: flex; align-items: center; gap: 6px; height: 48px; margin-bottom: 12px; padding: 0 6px 0 12px;
+  border-radius: 12px; background: var(--panel, rgb(0 0 0 / .2)); color: #fff; }
+.party-label { flex: 1; min-width: 0; font-weight: 800; font-size: 14px; white-space: nowrap; overflow: hidden; }
+.party-label small { display: block; font-weight: 600; opacity: .7; font-size: 11px; line-height: 1; }
+.party-slots { flex: 1; display: flex; flex-direction: column; gap: 7px; padding: 10px; border-radius: 16px; background: rgb(0 0 0 / .14); }
+.party-slots .slot { flex: 1; height: auto !important; min-height: 0; aspect-ratio: auto; }
+.party-toggle { flex: none; width: 30px; height: 30px; border-radius: 9px; border: 0; display: grid; place-items: center;
+  background: rgb(255 255 255 / .14); color: inherit; cursor: pointer; }
+.party-toggle:hover { background: rgb(255 255 255 / .26); }
+.party-toggle .i { width: 16px; height: 16px; transition: transform .18s ease; }
+/* folded: a thin tab with the name written down its side */
+.party.folded .party-slots { display: none; }
+.party.folded .party-head { flex-direction: column; height: auto; flex: 1; padding: 9px 0; margin: 0; gap: 10px; cursor: pointer; }
+.party.folded .party-label { flex: none; writing-mode: vertical-rl; overflow: visible; }
+.party.folded .party-label small { display: inline; margin-top: 6px; }
+.party.folded .party-toggle { order: -1; }
+.party.folded .party-toggle .i { transform: rotate(180deg); }
 /* a Vault Pokémon whose copy is visiting an older game */
 .slot.away .ico { opacity: .45; filter: grayscale(.6); }
 .slot .away-tag { position: absolute; left: 50%; top: 3px; transform: translateX(-50%); font-size: 9px; font-weight: 800;
@@ -559,6 +579,125 @@ body.vault-only .segment { grid-template-columns: 1fr; }
 
 /* ---------- Games (v2) ---------- */
 .games-view { max-width: 980px; }
+/* playing a game: PokeVault pauses */
+.playing { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 16px;
+  background: rgb(6 30 27 / .62); backdrop-filter: blur(6px); animation: playing-in .25s ease; }
+.playing[hidden] { display: none; }
+.playing-card { max-width: 420px; text-align: center; padding: 28px 26px 22px; border-radius: 24px; color: #fff;
+  background: var(--panel, #0f5d53); box-shadow: 0 20px 60px rgb(0 0 0 / .35); }
+.playing-art { display: grid; place-items: center; height: 84px; margin-bottom: 6px; }
+.playing-art .src-chip { transform: scale(2.2); }
+.playing-art .i { width: 54px; height: 54px; fill: currentColor; opacity: .85; animation: playing-pulse 1.6s ease-in-out infinite; }
+.playing-card h2 { margin: 4px 0 2px; font-size: 24px; }
+.playing-sub { margin: 0 0 12px; opacity: .8; font-weight: 700; }
+.playing-note { margin: 0 0 16px; font-size: 13.5px; line-height: 1.5; opacity: .9; }
+@keyframes playing-in { from { opacity: 0; } }
+@keyframes playing-pulse { 50% { transform: scale(1.08); opacity: 1; } }
+/* Emulators (the light, HOME-like look of the Games screen) */
+.play-view { max-width: none; margin: 0; padding: 0; width: 100%; box-sizing: border-box;
+  background: linear-gradient(180deg, #dff6ef, #c9eee3); color: #1d3a35; min-height: calc(100vh - 68px); }
+.em-wrap { max-width: 1240px; margin: 0 auto; padding: 26px 28px 48px; }
+.em-hero { display: flex; align-items: center; gap: 24px; justify-content: space-between; padding: 22px 26px; border-radius: 22px;
+  background: #fff; box-shadow: 0 10px 30px rgb(22 90 78 / .12); }
+.em-hero h2 { margin: 0 0 4px; font-size: 26px; color: #1d3a35; }
+.em-hero p { margin: 0; color: #4b6b65; max-width: 720px; line-height: 1.5; }
+.em-hero a { color: #129a85; font-weight: 700; }
+.em-count { flex: none; text-align: center; padding: 10px 20px; border-radius: 18px; background: #e8f7f2; }
+.em-count b { display: block; font-size: 26px; color: #129a85; line-height: 1.1; }
+.em-count small { color: #4b6b65; font-weight: 600; }
+.em-sec { margin-top: 26px; }
+.em-sec-head { display: flex; align-items: center; justify-content: space-between; margin: 0 4px 12px; }
+.em-sec-head h3 { margin: 0; font-size: 18px; color: #1d3a35; }
+.em-btn { border: 0; border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+  background: #e8f5f0; color: #1d3a35; white-space: nowrap; transition: background .15s, transform .1s; }
+.em-btn:hover { background: #d6efe7; }
+.em-btn:active { transform: scale(.97); }
+.em-btn.primary { background: #ffd23f; color: #3a2f00; }
+.em-btn.primary:hover { background: #ffc61a; }
+/* emulator cards */
+.em-emus { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.em-emu { position: relative; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; padding: 16px;
+  border-radius: 20px; background: #fff; box-shadow: 0 6px 18px rgb(22 90 78 / .1); border: 2px solid transparent; }
+.em-emu.running { border-color: var(--sys); }
+.em-sys { grid-row: span 2; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; color: #fff;
+  font-weight: 900; font-size: 13px; letter-spacing: .02em; background: var(--sys); box-shadow: inset 0 -4px 0 rgb(0 0 0 / .15); }
+.em-emu.missing .em-sys { filter: grayscale(.85); opacity: .55; }
+/* the emulators' own icons (a coloured badge with the system's name if one is missing) */
+.em-sys:not(.noimg) { background: none; box-shadow: none; width: 56px; height: 56px; }
+.em-sys img, .em-mini img { width: 100%; height: 100%; object-fit: contain; border-radius: 22%; display: block; }
+.em-sys:not(.noimg) b, .em-mini:not(.noimg) b { display: none; }
+.em-mini { display: inline-grid; place-items: center; width: 1.35em; height: 1.35em; margin-right: .4em; vertical-align: -.3em;
+  border-radius: .35em; background: var(--sys); color: #fff; font-size: 1em; }
+.em-mini:not(.noimg) { background: none; }
+.em-mini.noimg b { font-size: .45em; font-weight: 900; }
+/* Switch games: Ryujinx or Sudachi */
+.em-choose { display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; background: #e3efeb; }
+.em-choose button { display: inline-flex; align-items: center; border: 0; border-radius: 999px; padding: 4px 10px 4px 6px; font: inherit;
+  font-size: 12.5px; font-weight: 700; color: #4b6b65; background: none; cursor: pointer; }
+.em-choose button.on { background: #fff; color: #1d3a35; box-shadow: 0 1px 4px rgb(22 90 78 / .18); }
+.em-choose .em-mini { margin-right: .3em; }
+.em-e-name b { display: block; font-size: 16px; }
+.em-e-name small { color: #4b6b65; }
+.em-state { font-size: 12px; font-weight: 800; color: #129a85; display: inline-flex; align-items: center; gap: 4px; }
+.em-state svg, .em-badge svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.em-emu.missing .em-state { color: #b2552d; }
+.em-emu.running .em-state { color: var(--sys); }
+.em-path { grid-column: 1 / -1; margin: 4px 0 6px; font-size: 12px; color: #6b8781; word-break: break-all; line-height: 1.4; min-height: 2.8em; }
+.em-emu .em-btn { grid-column: 1 / -1; justify-self: start; }
+/* game cards with three steps */
+.em-games { display: grid; gap: 14px; }
+.em-game { padding: 16px 18px 18px; border-radius: 22px; background: #fff; box-shadow: 0 6px 18px rgb(22 90 78 / .1);
+  border-left: 6px solid var(--sys); transition: box-shadow .3s; }
+.em-game.running { box-shadow: 0 0 0 3px var(--sys), 0 6px 18px rgb(22 90 78 / .1); }
+.em-game.flash { animation: em-flash 1.6s ease; }
+@keyframes em-flash { 20%, 60% { box-shadow: 0 0 0 4px #ffd23f, 0 10px 30px rgb(22 90 78 / .2); } }
+.em-g-head { display: flex; align-items: center; gap: 14px; }
+.em-g-art { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 16px; background: #e8f5f0; flex: none; }
+.em-g-art .src-chip { transform: scale(1.5); background: none; }
+.em-g-name { flex: 1; min-width: 0; }
+.em-g-name h3 { margin: 0; font-size: 19px; color: #1d3a35; }
+.em-g-name small { color: #4b6b65; font-weight: 600; }
+.em-badge { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 800; white-space: nowrap; }
+.em-badge.ok { background: #dcf5e9; color: #128a5a; }
+.em-badge.warn { background: #fff1cc; color: #8a6300; }
+.em-badge.todo { background: #eef2f1; color: #5f7c77; }
+.em-badge.live { background: var(--sys); color: #fff; }
+.em-play { display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 999px; padding: 10px 22px; font: inherit;
+  font-weight: 800; font-size: 15px; cursor: pointer; background: #ffd23f; color: #3a2f00; box-shadow: 0 3px 0 #d9a800; }
+.em-play .i { width: 16px; height: 16px; fill: currentColor; }
+.em-play:hover:not(:disabled) { background: #ffc61a; }
+.em-play:disabled { background: #eef2f1; color: #9db1ac; box-shadow: none; cursor: not-allowed; }
+.em-steps { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.em-step { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: 16px; background: #f4faf8; min-width: 0; }
+.em-step.warn { background: #fff8e2; }
+.em-n { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; font-weight: 900; font-size: 13px;
+  background: #dfe9e6; color: #5f7c77; }
+.em-step.done .em-n { background: #18a57b; color: #fff; }
+.em-step.warn .em-n { background: #f0b400; color: #fff; }
+.em-n svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.em-sv { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.em-sv small { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #6b8781; }
+.em-sv b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1d3a35; }
+.em-sv em { font-style: normal; font-weight: 600; color: #8a6300; }
+.em-step.done .em-sv em { color: #6b8781; }
+.em-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.em-none { color: #4b6b65; }
+@media (max-width: 900px) {
+  .em-steps { grid-template-columns: 1fr; }
+  .em-g-head { flex-wrap: wrap; }
+  .em-hero { flex-direction: column; align-items: flex-start; }
+}
+/* Games: play from the game's card */
+.gs-actions .gs-play { background: #ffd23f; color: #3a2f00; display: inline-flex; gap: .4em; }
+.gs-actions .gs-play .i { width: .9em; height: .9em; fill: currentColor; }
+.gs-actions .gs-play.setup { background: #e8f5f0; color: #1d3a35; }
+.gs-actions .btn.ghost { background: #e8f5f0; color: #1d3a35; }
+.gs-playline { margin: -.3em 0 0; text-align: center; font-size: 1.05em; color: #4b6b65; }
+.gs-playline em { font-style: normal; color: #8a6300; font-weight: 700; }
+.gs-playline.live { color: #129a85; font-weight: 700; }
+.pl-choice { display: grid; gap: 10px; margin-top: 10px; }
+.pl-choice .btn { display: flex; flex-direction: column; align-items: flex-start; text-align: left; height: auto; padding: 10px 14px; gap: 2px; }
+.pl-choice small { font-weight: 500; opacity: .85; font-size: 12px; white-space: normal; }
 .games-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
 .games-head h2 { font-size: 22px; }
 .games-head p { margin: 4px 0 0; max-width: 560px; }
@@ -900,7 +1039,7 @@ html, body, * { scrollbar-width: none; }
   --dual-row: clamp(var(--dual-cell), calc((100vh - var(--dual-chrome) - 32px) / 5), calc(var(--dual-cell) * 1.15));
 }
 .boxes-view:has(.bx.dual) { max-width: none; padding-left: 28px; padding-right: 28px; padding-bottom: 16px; }
-.bx.dual { grid-template-columns: minmax(0, calc(var(--dualw) * 2 + var(--dual-gap))); justify-content: center; }
+.bx.dual { grid-template-columns: minmax(0, calc(var(--dualw) * 2 + var(--dual-gap) + var(--party-w, 0px))); justify-content: center; }
 .bx.dual .bx-detail { display: none; }
 .bx.dual .boxes-layout { display: grid; grid-template-columns: 1fr 1fr; gap: var(--dual-gap); align-items: start; }
 .bx.dual .slot { aspect-ratio: auto; height: var(--dual-row); }
@@ -910,7 +1049,23 @@ html, body, * { scrollbar-width: none; }
   content: attr(data-owner); font-size: 11px; font-weight: 800; letter-spacing: .3px;
   padding: 3px 8px; border-radius: 999px; background: rgba(255, 255, 255, .16); margin-right: 8px;
 }
+:root { --party-col: 104px; }
+.bx.dual.has-party {
+  --party-w: calc(var(--party-col) + var(--dual-gap));
+  /* the same sizes as above, worked out again with the party column taken off the width */
+  --dualw: min(calc((100vh - var(--dual-chrome) - 32px) * 1.2 + 40px), calc((100vw - 56px - var(--dual-gap) - var(--party-w)) / 2));
+  --dual-cell: calc((var(--dualw) - 40px) / 6);
+  --dual-row: clamp(var(--dual-cell), calc((100vh - var(--dual-chrome) - 32px) / 5), calc(var(--dual-cell) * 1.15));
+}
+.bx.dual.has-party.party-folded { --party-col: 44px; }
+.bx.dual.has-party .boxes-layout { grid-template-columns: var(--party-col) 1fr 1fr; }
+.bx.dual .party { align-self: stretch; }
 @media (max-width: 900px) { .bx.dual .boxes-layout { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .bx.dual.has-party .boxes-layout { grid-template-columns: 1fr; }
+  .bx.dual .party-slots { flex-direction: row; }
+  .bx.dual .party-slots .slot { height: 72px !important; }
+}
 
 /* Games screen: the game's box art as its icon (coloured letters if there's no cover) */
 .game-cover {
@@ -974,7 +1129,7 @@ html, body, * { scrollbar-width: none; }
 .bx-search .results .mini { width: 100%; justify-content: flex-start; text-align: left; }
 
 /* a game chosen: both boxes side by side, no side columns */
-.bx.dual { grid-template-columns: minmax(0, calc(var(--dualw) * 2 + var(--dual-gap))); }
+.bx.dual { grid-template-columns: minmax(0, calc(var(--dualw) * 2 + var(--dual-gap) + var(--party-w, 0px))); }
 .bx.dual > .bx-left { grid-column: 1; }
 .bx.dual > .bx-search, .bx.dual > .bx-detail, .bx.dual #btnBoxMenu { display: none; }
 
@@ -1433,6 +1588,8 @@ html[data-theme="retro"], html[data-theme="retro"]:not(#_) {
 
 /* ---------- box wallpapers: drawn behind the Vault grid (the slots are see-through) ---------- */
 #pane-vault .box .grid { padding: 10px; border-radius: 16px; background: var(--wp, transparent); }
+/* the game's box sits in the same kind of panel, so its slots line up with the Vault's and the party's */
+#pane-game .box .grid { padding: 10px; border-radius: 16px; background: rgb(0 0 0 / .14); }
 [data-wp="0"] { --wp: linear-gradient(160deg, #4cc3ad, #1d7f75); }
 [data-wp="1"] { --wp: linear-gradient(160deg, #5aa9e6, #24609a); }
 [data-wp="2"] { --wp: linear-gradient(160deg, #a184e8, #5a3f9e); }

@@ -34,6 +34,7 @@ builder.Services.AddSingleton<ModelService>();
 builder.Services.AddSingleton<SpriteService>();
 builder.Services.AddSingleton<PmdService>();
 builder.Services.AddSingleton<MoveDataService>();
+builder.Services.AddSingleton<EmulatorService>();
 builder.Services.AddSingleton<RibbonImageService>();
 builder.Services.AddSingleton<EncounterService>();
 
@@ -89,6 +90,8 @@ var models = app.Services.GetRequiredService<ModelService>();
 var sprites = app.Services.GetRequiredService<SpriteService>();
 var pmd = app.Services.GetRequiredService<PmdService>();
 var moveData = app.Services.GetRequiredService<MoveDataService>();
+var emulators = app.Services.GetRequiredService<EmulatorService>();   // created now: it tells GameService which saves are in use
+emulators.AwayNames = id => vault.All.Where(e => e.Away?.GameId == id).Select(e => vault.Info(e)?.SpeciesName ?? "A Pokémon").ToArray();
 var ribbonImages = app.Services.GetRequiredService<RibbonImageService>();
 var catches = app.Services.GetRequiredService<CatchWatcher>();
 var journey = app.Services.GetRequiredService<JourneyService>();
@@ -121,6 +124,7 @@ app.MapGet("/api/status", () => Run(() =>
     return new
     {
         emulatorRunning = GameService.EmulatorRunning,
+        playing = emulators.Now(),   // a game being played: PokeVault pauses, then refreshes when it closes
         desktop,
         games = list,
         defaultGame = last?.Id,
@@ -134,6 +138,58 @@ app.MapGet("/api/status", () => Run(() =>
         catchSeq = catches.LastId,
     };
 }));
+
+/* ---------- play: emulators, game files, real saves ---------- */
+
+app.MapGet("/api/play", () => Run(() => new { emulators = emulators.Emulators(), games = emulators.Games() }));
+app.MapPost("/api/play/emulator", (EmulatorRequest r) => Run(() => { emulators.SetExe(r.Kind, r.Path); return new { ok = true }; }));
+app.MapPost("/api/play/{id}/rom", (string id, PathRequest r) => Run(() => { emulators.SetRom(id, r.Path); return new { ok = true }; }));
+app.MapPost("/api/play/{id}/emulator", (string id, EmulatorRequest r) => Run(() => { emulators.SetEmulator(id, r.Kind); return new { ok = true }; }));
+app.MapPost("/api/play/{id}/start", (string id) => Run(() => new { emulator = emulators.Start(id) }));
+app.MapPost("/api/play/{id}/place-citra", (string id) => Run(() => new { path = emulators.PlaceInCitra(id) }));
+app.MapPost("/api/play/{id}/link-save", (string id, LinkSaveRequest r) => Run(() =>
+{
+    var g = games.Get(id);
+    // the emulator may be open on that file even though PokeVault doesn't use it yet: it would overwrite the change
+    if (emulators.RunningFor(g) is { } who)
+        throw new VaultException($"{who} is open. Save in the game and close {who} first, then link the save.");
+    var back = new List<string>();
+    if (!r.KeepPokeVault)
+    {
+        var path = Path.GetFullPath(r.Path.Trim().Trim('"'));
+        if (GameService.Inspect(path).Blank)
+            throw new VaultException("That save is empty (the game was never saved in it), so there's nothing to use yet. Keep PokeVault's version instead.");
+        // Pokémon visiting from the Vault only exist in PokeVault's version: bring them home first, with what they did here
+        lock (TransferService.Gate)
+        {
+            var sav = games.LoadForReading(id);
+            foreach (var e in vault.All.Where(e => e.Away?.GameId == id).ToList())
+            {
+                var name = vault.Info(e)?.SpeciesName ?? "A Pokémon";
+                SlotRef? at = null;
+                for (int b = 0; b < sav.BoxCount && at is null; b++)
+                    for (int s = 0; s < sav.BoxSlotCount && at is null; s++)
+                        if (sav.GetBoxSlotAtIndex(b, s) is { Species: > 0 } pk && CatchWatcher.Identity(pk) == e.Away!.CopyUid) at = new(b, s);
+                if (at is null && sav.HasParty)
+                    for (int i = 0; i < sav.PartyCount && at is null; i++)
+                        if (CatchWatcher.Identity(sav.GetPartySlotAtIndex(i)) == e.Away!.CopyUid) at = new(TransferService.Party, i);
+                if (at is not null) { transfer.Deposit(id, [at], copy: false, null, null); back.Add(name); }
+                else { e.Away = null; vault.Touch(e); vault.Persist(); back.Add(name); }   // its copy isn't there any more: just unlock it
+            }
+        }
+    }
+    var linked = games.Relink(id, r.Path, r.KeepPokeVault);
+    return new { game = linked, back };
+}));
+// When a file was last written (to compare a real save with PokeVault's copy before linking).
+app.MapGet("/api/pick-info", (string path) => Run(() =>
+{
+    if (!File.Exists(path)) return new { time = (DateTime?)null, blank = false, game = (string?)null, trainer = (string?)null, problem = (string?)"No file at that path." };
+    var (blank, game, trainer, problem) = GameService.Inspect(path);
+    return new { time = (DateTime?)File.GetLastWriteTime(path), blank, game, trainer, problem };
+}));
+// A Windows file picker (PokeVault runs on this PC, so it can show one and hand back the full path).
+app.MapPost("/api/pick", (PickRequest r) => Run(() => new { path = FilePicker.Pick(r.Title, r.Filter, r.Start) }));
 
 // Live catch alerts: Pokémon that turned up in a save since the page last asked.
 app.MapGet("/api/catches", (long? after) => Run(() => catches.Since(after ?? 0)));
@@ -160,6 +216,20 @@ app.MapGet("/api/games/{id}/box/{box:int}", (string id, int box) => Run(() =>
         return pk.Species == 0 ? null : MonDescriber.Describe(pk, box, s, locked: locked);
     }).ToArray();
     return new { box, name = GameService.BoxName(sav, box), slots };
+}));
+
+// The party (box -1 in moves): up to six, in order; empty when the save has no party.
+app.MapGet("/api/games/{id}/party", (string id) => Run(() =>
+{
+    var sav = games.LoadForReading(id);
+    if (!sav.HasParty) return new { has = false, slots = Array.Empty<MonInfo?>() };
+    var slots = Enumerable.Range(0, 6).Select(i =>
+    {
+        if (i >= sav.PartyCount) return null;
+        var pk = sav.GetPartySlotAtIndex(i);
+        return pk.Species == 0 ? null : MonDescriber.Describe(pk, -1, i);
+    }).ToArray();
+    return new { has = true, slots };
 }));
 
 app.MapGet("/api/games/{id}/overview", (string id) => Run(() =>
@@ -563,3 +633,6 @@ record BondRequest(string Kind, int Delta);
 record SmartBox(string? Id, string? Name, string? Q, string? Type, bool Shiny, int Gen, bool Perfect);
 
 record GameMoveRequest(int FromBox, int FromSlot, int ToBox, int ToSlot);
+record EmulatorRequest(string Kind, string? Path);
+record LinkSaveRequest(string Path, bool KeepPokeVault);
+record PickRequest(string? Title, string? Filter, string? Start);

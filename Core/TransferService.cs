@@ -35,15 +35,23 @@ public sealed class TransferService(GameService games, VaultService vault, Journ
         var source = $"{g.Game} · {sav.OT}";
         try
         {
+            var partyOut = new List<int>();   // party slots to empty afterwards (emptying one shifts the rest up)
             foreach (var r in slots.Distinct())
             {
-                if (r.Box < 0 || r.Box >= sav.BoxCount || r.Slot < 0 || r.Slot >= sav.BoxSlotCount)
-                { skipped.Add(new("?", "That box slot doesn't exist.")); continue; }
-                var pk = sav.GetBoxSlotAtIndex(r.Box, r.Slot);
+                bool party = r.Box == Party;
+                if (party ? !sav.HasParty || r.Slot < 0 || r.Slot >= sav.PartyCount
+                          : r.Box < 0 || r.Box >= sav.BoxCount || r.Slot < 0 || r.Slot >= sav.BoxSlotCount)
+                { skipped.Add(new("?", "That slot doesn't exist.")); continue; }
+                var pk = party ? sav.GetPartySlotAtIndex(r.Slot) : sav.GetBoxSlotAtIndex(r.Box, r.Slot);
+                // what stays in the party once this one (and any picked before it) leaves needs a non-Egg Pokémon
+                if (party && !copy && pk.Species != 0 && !Enumerable.Range(0, sav.PartyCount)
+                        .Where(i => i != r.Slot && !partyOut.Contains(i))
+                        .Any(i => sav.GetPartySlotAtIndex(i) is { Species: > 0, IsEgg: false }))
+                { skipped.Add(new(MonDescriber.SpeciesName(pk.Species), "Your party needs at least one Pokémon that isn't an Egg.")); continue; }
                 var name = MonDescriber.SpeciesName(pk.Species);
                 if (pk.Species == 0) { skipped.Add(new("Empty slot", "Nothing there.")); continue; }
                 if (!pk.ChecksumValid) { skipped.Add(new(name, "Its data looks damaged (bad checksum).")); continue; }
-                if (!copy && (sav.IsBoxSlotLocked(r.Box, r.Slot) || sav.IsBoxSlotOverwriteProtected(r.Box, r.Slot)))
+                if (!copy && !party && (sav.IsBoxSlotLocked(r.Box, r.Slot) || sav.IsBoxSlotOverwriteProtected(r.Box, r.Slot)))
                 { skipped.Add(new(name, "The game has locked that slot.")); continue; }
 
                 // a copy PokeVault sent here from the Vault: the original takes its progress back
@@ -52,7 +60,7 @@ public sealed class TransferService(GameService games, VaultService vault, Journ
                 {
                     var orig = vault.Read(home);
                     back.Add((home, DownConverter.MergeBack(orig, pk, home.Away!), CatchWatcher.Identity(orig), name));
-                    if (!copy) sav.SetBoxSlotAtIndex(sav.BlankPKM, r.Box, r.Slot, EntityImportSettings.None);
+                    if (!copy) { if (party) partyOut.Add(r.Slot); else sav.SetBoxSlotAtIndex(sav.BlankPKM, r.Box, r.Slot, EntityImportSettings.None); }
                     continue;
                 }
 
@@ -64,8 +72,9 @@ public sealed class TransferService(GameService games, VaultService vault, Journ
                         "Only that Pokémon can go there. Pick an empty slot for this one.");
                 var entry = vault.Add(pk.Clone(), vb, vs, source);
                 done.Add((pk, entry));
-                if (!copy) sav.SetBoxSlotAtIndex(sav.BlankPKM, r.Box, r.Slot, EntityImportSettings.None);
+                if (!copy) { if (party) partyOut.Add(r.Slot); else sav.SetBoxSlotAtIndex(sav.BlankPKM, r.Box, r.Slot, EntityImportSettings.None); }
             }
+            foreach (var i in partyOut.OrderDescending()) sav.DeletePartySlot(i);
             // Vault files are written first, so a Pokémon always exists somewhere even if the save write fails.
             if (!copy && (done.Count > 0 || back.Count > 0)) games.Write(gameId, sav);
         }
@@ -126,6 +135,24 @@ public sealed class TransferService(GameService games, VaultService vault, Journ
             }
             else if (!TryConvert(original, sav, out pk, out var why)) { skipped.Add(new(name, why)); continue; }
 
+            if (box == Party)
+            {
+                if (!sav.HasParty) { skipped.Add(new(name, $"{g.Game} saves have no party.")); continue; }
+                if (sav.PartyCount >= 6) { skipped.Add(new(name, "Your party is full (six Pokémon).")); continue; }
+                int at = sav.PartyCount;
+                ToParty(pk);
+                sav.SetPartySlotAtIndex(pk, at, Import);
+                var inParty = sav.GetPartySlotAtIndex(at);
+                done.Add((entry, MonDescriber.Describe(inParty, Party, at), CatchWatcher.Identity(original)));
+                if (pairs is not null)
+                    trips.Add((entry, new AwayTrip
+                    {
+                        GameId = gameId, Game = g.Game, Gen = sav.Generation, CopyUid = CatchWatcher.Identity(inParty),
+                        SentSpecies = inParty.Species, Moves = pairs, SentNickname = inParty.Nickname, SentItem = inParty.HeldItem, Time = DateTime.Now,
+                    }, name, swaps!.ToArray()));
+                continue;
+            }
+
             int tb, ts;
             if (ids.Count == 1 && box is int b && slot is int s)
             {
@@ -178,6 +205,7 @@ public sealed class TransferService(GameService games, VaultService vault, Journ
         var sav = games.LoadForEditing(gameId);
         if (!GameService.CanMoveOut(sav))
             throw new VaultException($"PokeVault can't rearrange {g.Game} boxes. Do it in the game.");
+        if (fromBox == Party || toBox == Party) { MoveWithParty(gameId, sav, fromBox, fromSlot, toBox, toSlot); return; }
         foreach (var (b, s) in new[] { (fromBox, fromSlot), (toBox, toSlot) })
         {
             if (b < 0 || b >= sav.BoxCount || s < 0 || s >= sav.BoxSlotCount)
@@ -190,6 +218,81 @@ public sealed class TransferService(GameService games, VaultService vault, Journ
         var other = sav.GetBoxSlotAtIndex(toBox, toSlot);
         sav.SetBoxSlotAtIndex(moving, toBox, toSlot, EntityImportSettings.None);
         sav.SetBoxSlotAtIndex(other.Species == 0 ? sav.BlankPKM : other, fromBox, fromSlot, EntityImportSettings.None);
+        games.Write(gameId, sav);
+    }
+
+    /// <summary>The party, in moves and transfers.</summary>
+    public const int Party = -1;
+
+    /// <summary>A Pokémon written into a party slot needs its battle stats filled in and full health.</summary>
+    private static void ToParty(PKM pk)
+    {
+        pk.ResetPartyStats();
+        pk.Stat_HPCurrent = pk.Stat_HPMax;
+        pk.Status_Condition = 0;
+    }
+
+    // Party ⇄ party (reorder), box ⇄ party (swap, or join the end of the party), party → empty box slot.
+    private void MoveWithParty(string gameId, SaveFile sav, int fromBox, int fromSlot, int toBox, int toSlot)
+    {
+        if (!sav.HasParty) throw new VaultException("This game has no party.");
+        void CheckBox(int b, int s)
+        {
+            if (b < 0 || b >= sav.BoxCount || s < 0 || s >= sav.BoxSlotCount) throw new VaultException("That box slot doesn't exist in this save.");
+            if (sav.IsBoxSlotLocked(b, s) || sav.IsBoxSlotOverwriteProtected(b, s)) throw new VaultException("The game has locked that slot, so it can't be changed.");
+        }
+        int count = sav.PartyCount;
+        if (fromBox == Party && (fromSlot < 0 || fromSlot >= count)) throw new VaultException("There's no Pokémon in that party slot any more.");
+
+        if (fromBox == Party && toBox == Party)
+        {
+            // reorder: take it out and put it back in at the new place
+            var list = Enumerable.Range(0, count).Select(sav.GetPartySlotAtIndex).ToList();
+            var moving = list[fromSlot];
+            list.RemoveAt(fromSlot);
+            list.Insert(Math.Clamp(toSlot, 0, list.Count), moving);
+            for (int i = 0; i < list.Count; i++) sav.SetPartySlotAtIndex(list[i], i, EntityImportSettings.None);
+        }
+        else if (fromBox == Party)
+        {
+            CheckBox(toBox, toSlot);
+            var moving = sav.GetPartySlotAtIndex(fromSlot);
+            var other = sav.GetBoxSlotAtIndex(toBox, toSlot);
+            if (other.Species == 0)
+            {
+                if (sav.IsPartyAllEggs(fromSlot)) throw new VaultException("Your party needs at least one Pokémon that isn't an Egg.");
+                sav.SetBoxSlotAtIndex(moving, toBox, toSlot, EntityImportSettings.None);
+                sav.DeletePartySlot(fromSlot);
+            }
+            else
+            {
+                if (other.IsEgg && sav.IsPartyAllEggs(fromSlot)) throw new VaultException("Your party needs at least one Pokémon that isn't an Egg.");
+                ToParty(other);
+                sav.SetBoxSlotAtIndex(moving, toBox, toSlot, EntityImportSettings.None);
+                sav.SetPartySlotAtIndex(other, fromSlot, EntityImportSettings.None);
+            }
+        }
+        else
+        {
+            CheckBox(fromBox, fromSlot);
+            var moving = sav.GetBoxSlotAtIndex(fromBox, fromSlot);
+            if (moving.Species == 0) throw new VaultException("There's no Pokémon in that slot any more.");
+            if (toSlot < count)
+            {
+                var other = sav.GetPartySlotAtIndex(toSlot);
+                if (moving.IsEgg && sav.IsPartyAllEggs(toSlot)) throw new VaultException("Your party needs at least one Pokémon that isn't an Egg.");
+                ToParty(moving);
+                sav.SetPartySlotAtIndex(moving, toSlot, EntityImportSettings.None);
+                sav.SetBoxSlotAtIndex(other, fromBox, fromSlot, EntityImportSettings.None);
+            }
+            else
+            {
+                if (count >= 6) throw new VaultException("Your party is full (six Pokémon).");
+                ToParty(moving);
+                sav.SetPartySlotAtIndex(moving, count, EntityImportSettings.None);
+                sav.SetBoxSlotAtIndex(sav.BlankPKM, fromBox, fromSlot, EntityImportSettings.None);
+            }
+        }
         games.Write(gameId, sav);
     }
 

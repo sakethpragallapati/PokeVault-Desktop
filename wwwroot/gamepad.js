@@ -15,7 +15,7 @@
 //   View ⧉  menu navigation on / off     Right stick  scroll (Meadow: zoom)
 (() => {
   const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, L3: 10, R3: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
-  const VIEWS = ['boxes', 'dex', 'meadow', 'games'];
+  const VIEWS = ['boxes', 'dex', 'meadow', 'games', 'play'];
   const DIRS = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' };
   const FIRST_REPEAT = 320, REPEAT = 105, STICK = 0.55;
 
@@ -246,7 +246,7 @@
     }
     if (b === BTN.A) press('Enter');
     else if (b === BTN.B) press('Escape');
-    else if (b === BTN.X) press(' ');
+    else if (b === BTN.X) press(view() === 'games' ? 'p' : ' ');   // X plays the chosen game on the Games screen
     else if (b === BTN.LB) press('q');
     else if (b === BTN.RB) press('e');
     else if (b === BTN.Y && view() === 'boxes' && typeof dual === 'function' && dual()) {

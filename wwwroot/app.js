@@ -93,7 +93,7 @@ const state = {
   gameId: null,
   gameBoxes: [],
   box: { game: 0, vault: 0 },
-  slots: { game: [], vault: [] },
+  slots: { game: [], vault: [], party: [] },
   select: null,     // { side, items: Map<key, mon> }
   pick: null,       // { kind: 'deposit' | 'withdraw' | 'vaultmove', mon }
   drag: null,       // { side, index }
@@ -109,7 +109,7 @@ const game = () => state.status?.games.find(g => g.id === state.gameId) ?? null;
 const gameColor = g => GAME_COLORS[g?.version] ?? '#7c8b88';
 const gameAbbr = g => g?.version ? g.version.slice(0, 3) : '?';
 const isRyu = g => g && (g.kind === 'ryujinx' || /\\Ryujinx\\/i.test(g.path));
-const gameWritable = g => !!g?.supported && !(isRyu(g) && state.status?.emulatorRunning);
+const gameWritable = g => !!g?.supported && !(isRyu(g) && state.status?.emulatorRunning) && !g.running;
 const name = m => (m.isNicknamed && !m.isEgg ? m.nickname : m.speciesName) || '???';
 const key = (side, m) => side === 'vault' ? m.id : `${m.box}:${m.slot}`;
 // Round type icons (from your icon set) in assets/types; typeChip shows the icon with the name.
@@ -293,9 +293,9 @@ async function loadGameBoxes() {
 }
 
 async function loadBox(side) {
-  if (side === 'game' && !state.gameId) { state.slots.game = []; render('game'); return; }
+  if (side === 'game' && !state.gameId) { state.slots.game = []; state.slots.party = []; render('game'); return; }
   const url = side === 'game' ? `/api/games/${state.gameId}/box/${state.box.game}` : `/api/vault/box/${state.box.vault}`;
-  const d = await api(url);
+  const [d] = await Promise.all([api(url), side === 'game' ? loadParty() : null]);
   state.slots[side] = d.slots;
   state.boxInfo ??= {};
   state.boxInfo[side] = d;
@@ -338,54 +338,110 @@ function render(side) {
   $('.box-title', pane).dataset.owner = side === 'vault' ? 'Vault' : (game()?.game ?? '');
 
   grid.replaceChildren();
-  for (let i = 0; i < size; i++) {
-    const m = slots[i];
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'slot' + (m ? '' : ' empty');
-    b.dataset.index = i;
-    b.setAttribute('aria-label', m ? `${name(m)}, level ${m.level}` : `Empty slot ${i + 1}`);
-    if (m) {
-      const ico = document.createElement('span');
-      ico.className = 'ico';
-      const pic = monIcon(m);
-      if (pic.tagName === 'IMG') {
-        pic.loading = 'eager'; // small, and the whole box is on screen anyway
-        pic.addEventListener('load', () => fitPixelIcon(pic));
-        if (pic.complete && pic.naturalWidth) requestAnimationFrame(() => fitPixelIcon(pic));
-      }
-      ico.append(pic);
-      b.append(ico);
-      b.insertAdjacentHTML('beforeend', `<span class="nm">${esc(m.isEgg ? 'Egg' : name(m))}</span>`);
-      if (!m.isEgg) b.insertAdjacentHTML('beforeend', `<span class="lv">${m.level}</span>`);
-      if (m.shiny) b.insertAdjacentHTML('beforeend', '<span class="star">★</span>');
-      if (m.locked) b.classList.add('locked');
-      if (side === 'vault' && m.awayIn) {
-        b.classList.add('away');
-        b.insertAdjacentHTML('beforeend', `<span class="away-tag">Away</span>`);
-      }
-      if (state.select?.side === side && state.select.items.has(key(side, m))) {
-        b.classList.add('picked');
-        b.insertAdjacentHTML('beforeend', '<span class="tick">✓</span>');
-      }
-      if (isHeld(side, m)) b.classList.add('lifted');
-      if (!state.pick && state.shown?.side === side && state.shown.k === key(side, m)) b.classList.add('shown');
-      if (side === 'vault' && state.highlight === m.id) b.classList.add('found');
-      const hg = state.highlightGame;
-      if (side === 'game' && hg && hg.gameId === state.gameId && hg.box === state.box.game && hg.slot === i) b.classList.add('found');
-      if (!state.select && !state.pick && !m.locked) b.draggable = true;
-    } else if (isPickTarget(side)) {
-      b.classList.add('target');
-    }
-    if (side === state.pane && i === state.cursor && !state.cursorHidden) b.classList.add('cursor');
-    if (i < (size % 6 === 0 ? 6 : 5)) b.classList.add('top-row');
-    if (m) b.dataset.tip = (m.isEgg ? 'Egg' : `${name(m)} (Lv. ${m.level})`) + (side === 'vault' && m.awayIn ? ` · away in ${m.awayIn}` : '');
-    grid.append(b);
-  }
+  for (let i = 0; i < size; i++) grid.append(makeSlot(side, slots[i], i, size));
   $$('.tool[data-act="select"]', pane).forEach(t => t.classList.toggle('on', state.select?.side === side));
   $('#btnSelect')?.classList.toggle('on', !!state.select);
   if (side === state.pane) renderDetail(side, shownMon(side));
+  if (side === 'game') renderParty();
 }
+
+// One slot button, for a box or the party.
+function makeSlot(side, m, i, size) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'slot' + (m ? '' : ' empty');
+  b.dataset.index = i;
+  b.setAttribute('aria-label', m ? `${name(m)}, level ${m.level}` : `Empty slot ${i + 1}`);
+  if (m) {
+    const ico = document.createElement('span');
+    ico.className = 'ico';
+    const pic = monIcon(m);
+    if (pic.tagName === 'IMG') {
+      pic.loading = 'eager'; // small, and the whole box is on screen anyway
+      pic.addEventListener('load', () => fitPixelIcon(pic));
+      if (pic.complete && pic.naturalWidth) requestAnimationFrame(() => fitPixelIcon(pic));
+    }
+    ico.append(pic);
+    b.append(ico);
+    b.insertAdjacentHTML('beforeend', `<span class="nm">${esc(m.isEgg ? 'Egg' : name(m))}</span>`);
+    if (!m.isEgg) b.insertAdjacentHTML('beforeend', `<span class="lv">${m.level}</span>`);
+    if (m.shiny) b.insertAdjacentHTML('beforeend', '<span class="star">★</span>');
+    if (m.locked) b.classList.add('locked');
+    if (side === 'vault' && m.awayIn) {
+      b.classList.add('away');
+      b.insertAdjacentHTML('beforeend', `<span class="away-tag">Away</span>`);
+    }
+    if (state.select?.side === paneOf(side) && state.select.items.has(key(side, m))) {
+      b.classList.add('picked');
+      b.insertAdjacentHTML('beforeend', '<span class="tick">✓</span>');
+    }
+    if (isHeld(side, m)) b.classList.add('lifted');
+    if (!state.pick && state.shown?.side === side && state.shown.k === key(side, m)) b.classList.add('shown');
+    if (side === 'vault' && state.highlight === m.id) b.classList.add('found');
+    const hg = state.highlightGame;
+    if (side === 'game' && hg && hg.gameId === state.gameId && hg.box === state.box.game && hg.slot === i) b.classList.add('found');
+    if (!state.select && !state.pick && !m.locked) b.draggable = true;
+  } else if (isPickTarget(side)) {
+    b.classList.add('target');
+  }
+  if (side !== 'party' && side === state.pane && i === state.cursor && !state.cursorHidden) b.classList.add('cursor');
+  if (side !== 'party' && i < (size % 6 === 0 ? 6 : 5)) b.classList.add('top-row');
+  if (m) b.dataset.tip = (m.isEgg ? 'Egg' : `${name(m)} (Lv. ${m.level})`) + (side === 'vault' && m.awayIn ? ` · away in ${m.awayIn}` : '');
+  return b;
+}
+
+/* ---------------- the party (a strip in the game's pane) ---------------- */
+
+// The party shares the game's pane: selections, the cursor's pane and "which game" are the game's.
+const paneOf = side => side === 'party' ? 'game' : side;
+const slotEls = side => side === 'party' ? $$('#party .slot') : $$(`#pane-${side} .slot`);
+
+async function loadParty() {
+  if (!state.gameId) { state.slots.party = []; state.partyHas = false; renderParty(); return; }
+  const id = state.gameId;
+  const d = await api(`/api/games/${id}/party`).catch(() => ({ has: false, slots: [] }));
+  if (id !== state.gameId) return;
+  state.slots.party = d.slots ?? [];
+  state.partyHas = !!d.has;
+  renderParty();
+}
+
+function renderParty() {
+  const el = $('#party');
+  if (!el) return;
+  el.hidden = !state.gameId || !state.partyHas || state.mode !== 'game';
+  $('.bx').classList.toggle('has-party', !el.hidden);
+  const row = $('.party-slots', el);
+  row.replaceChildren();
+  if (el.hidden) return;
+  const slots = state.slots.party ?? [];
+  for (let i = 0; i < 6; i++) row.append(makeSlot('party', slots[i], i, 6));
+  $('.party-count', el).textContent = `${slots.filter(Boolean).length}/6`;
+  setPartyShown(partyShown());
+}
+
+// The party bar can fold away to a slim "Party 6/6" line; the choice is remembered.
+const partyShown = () => { try { return localStorage.getItem('pv.party') !== 'hidden'; } catch { return true; } };
+function setPartyShown(on) {
+  const el = $('#party');
+  if (!el) return;
+  el.classList.toggle('folded', !on);
+  $('.bx').classList.toggle('party-folded', !on);
+  const t = $('.party-toggle', el);
+  t.setAttribute('aria-expanded', on);
+  t.title = on ? 'Hide the party' : 'Show the party';
+  // the boxes change size with the column: redraw the sprites at their new size
+  requestAnimationFrame(() => requestAnimationFrame(refitPixelIcons));
+}
+$('#party .party-toggle')?.addEventListener('click', e => {
+  e.stopPropagation();
+  const on = !partyShown();
+  try { localStorage.setItem('pv.party', on ? 'shown' : 'hidden'); } catch { /* still toggles for now */ }
+  setPartyShown(on);
+  window.sfx?.tick?.();
+});
+$('#party .party-head')?.addEventListener('click', e => { if (!partyShown() && !e.target.closest('.party-toggle')) $('#party .party-toggle').click(); });
+
 
 /* ---------------- cursor & detail panel (right side) ---------------- */
 
@@ -437,7 +493,7 @@ function showMon(side, m) {
   if (m && (state.shown?.side !== side || state.shown?.k !== key(side, m))) playCry(m);
   state.shown = m ? { side, k: key(side, m) } : null;
   const at = m ? state.slots[side].indexOf(m) : -1;
-  $$(`#pane-${side} .slot`).forEach(el => el.classList.toggle('shown', +el.dataset.index === at));
+  for (const sd of ['game', 'vault', 'party']) slotEls(sd).forEach(el => el.classList.toggle('shown', sd === side && +el.dataset.index === at));
   renderDetail(side, m);
 }
 
@@ -475,7 +531,7 @@ function renderDetail(side, m) {
 /* ---------------- slot interaction ---------------- */
 
 function isPickTarget(side) {
-  return !!state.pick && (dual() || side === state.pane);
+  return !!state.pick && (dual() || paneOf(side) === state.pane);
 }
 
 async function onSlot(side, i) {
@@ -483,27 +539,31 @@ async function onSlot(side, i) {
   state.highlightGame = null;   // a catch alert's marker goes away once you start using the box
 
   if (state.pick) {
-    if (side !== state.pane) { if (!dual()) return; focusPane(side, i); }
-    state.cursor = i;
+    if (paneOf(side) !== state.pane) { if (!dual()) return; focusPane(paneOf(side), side === 'party' ? 0 : i); }
+    if (side !== 'party') state.cursor = i;
     await putDown(side, i);
     return;
   }
 
   if (state.select) {
-    if (state.select.side !== side) { toast('Finish or cancel your selection first.'); return; }
+    if (state.select.side !== paneOf(side)) { toast('Finish or cancel your selection first.'); return; }
     if (!m) return;
     const k = key(side, m);
     if (state.select.items.has(k)) state.select.items.delete(k); else state.select.items.set(k, m);
     window.sfx?.select();
-    render(side);
+    render(paneOf(side));
     updateActionBar();
     return;
   }
 
   // Left click shows the Pokémon (with its cry); clicking it again picks it up. Right click opens its menu.
   closeMonMenu(true);
-  if (side !== state.pane && dual()) focusPane(side, i);
-  if (state.cursor !== i || side !== state.pane) setCursor(i);
+  if (side === 'party') {
+    if (state.pane !== 'game' && dual()) focusPane('game', state.cursor);
+  } else {
+    if (side !== state.pane && dual()) focusPane(side, i);
+    if (state.cursor !== i || side !== state.pane) setCursor(i);
+  }
   if (!m) { showMon(side, null); return; }
   if (state.shown?.side !== side || state.shown.k !== key(side, m)) { window.sfx?.select(); showMon(side, m); return; }
   if (m.locked) { toast('The game has locked that slot.', true); return; }
@@ -513,8 +573,10 @@ async function onSlot(side, i) {
 function slotMenu(side, i) {
   const m = state.slots[side][i];
   if (!m || state.pick || state.select) return false;
-  if (side !== state.pane && dual()) focusPane(side, i);
-  if (state.cursor !== i || side !== state.pane) setCursor(i);
+  if (side !== 'party') {
+    if (side !== state.pane && dual()) focusPane(side, i);
+    if (state.cursor !== i || side !== state.pane) setCursor(i);
+  }
   if (state.shown?.side !== side || state.shown.k !== key(side, m)) showMon(side, m);
   openMonMenu(side, i, m);
   return true;
@@ -524,6 +586,12 @@ function onDrop(fromSide, fromIndex, toSide, toIndex) {
   const m = state.slots[fromSide][fromIndex];
   const target = state.slots[toSide][toIndex];
   if (!m) return;
+  if (fromSide === 'party' || toSide === 'party') {
+    if (fromSide === toSide && fromIndex === toIndex) return;
+    state.pick = { from: fromSide, mon: m, gameId: state.gameId };
+    putDown(toSide, toIndex);
+    return;
+  }
   if (fromSide === 'game' && toSide === 'vault') {
     if (target && !target.awayIn) return toast('Drop it on an empty vault slot.');   // or on its own AWAY slot
     deposit([m], false, state.box.vault, toIndex);
@@ -576,7 +644,7 @@ const withdraw = (ids, box, slot) => run(async () => {
   const r = await api('/api/withdraw', { body: { gameId: state.gameId, ids, box, slot } });
   closeSheet(); endSelect();
   if (r.done.length) window.sfx?.place();
-  if (r.box != null) state.box.game = r.box;
+  if (r.box != null && r.box >= 0) state.box.game = r.box;
   const trips = (r.trips ?? []).filter(t => !t.back);
   if (trips.length && !r.skipped?.length) tripDialog(trips, g.game);
   else if (r.done.length) toast(r.done.length === 1 ? `${name(r.done[0])} was sent to ${g.game}.` : `${r.done.length} Pokémon sent to ${g.game}.`);
@@ -684,6 +752,23 @@ async function putDown(side, i) {
   const { from, mon, gameId } = state.pick;
   const target = state.slots[side][i];
   if (isHeld(side, target)) { endPick(); return; }                 // same slot: put it back
+  if (side === 'party' || from === 'party') {
+    const inGame = s => s === 'game' || s === 'party';
+    if (inGame(from) && inGame(side)) {                               // party ⇄ party, box ⇄ party
+      if (gameId !== state.gameId) { toast('To move between games, put it in the Vault first, then send it on.'); return; }
+      endPick(); await gameMove(from === 'party' ? -1 : mon.box, mon.slot, side === 'party' ? -1 : state.box.game, side === 'party' ? i : i); return;
+    }
+    if (from === 'vault') {                                           // Vault → party: joins the end of the party
+      if (target) { toast('Pick an empty party slot.'); return; }
+      endPick(); await withdraw([mon.id], -1, null); return;
+    }
+    // party → Vault
+    if (target && !target.awayIn) { toast('Moving between a game and the Vault needs an empty slot. Pick an empty one.'); return; }
+    endPick();
+    if (gameId !== state.gameId) await selectGame(gameId);
+    await deposit([mon], false, state.box.vault, i);
+    return;
+  }
   if (from === 'vault' && side === 'vault') { endPick(); await vaultMove(mon.id, state.box.vault, i); return; }
   if (from === 'game' && side === 'game') {
     if (gameId !== state.gameId) { toast('To move between games, put it in the Vault first, then send it on.'); return; }
@@ -807,7 +892,7 @@ const menuItems = (side, m) => side === 'vault' && m.awayIn
 
 function openMonMenu(side, i, m) {
   closeMonMenu(true);
-  const slot = $$(`#pane-${side} .slot`)[i];
+  const slot = slotEls(side)[i];
   if (!slot) return;
   const el = document.createElement('div');
   el.className = 'mon-menu';
@@ -886,7 +971,7 @@ function openSummary(side, m) {
   sum.move = -1;
   const list = state.slots[side]?.filter(Boolean) ?? [];
   const i = list.findIndex(x => key(side, x) === key(side, m));
-  sum.side = side;
+  sum.side = paneOf(side);
   sum.list = i >= 0 ? list : [m];
   sum.i = Math.max(0, i);
   const el = $('#summary');
@@ -1509,7 +1594,8 @@ function setView(v, opts = {}) {
   window.sfx?.pauseMusic?.(v === 'meadow'); // the Meadow has its own sounds
   if (v === 'meadow' && !opts.noLoad) showMeadow();
   if (v === 'dex') loadDex().catch(fail);
-  if (v === 'games') { $('#view-games').dataset.ids = ''; renderGames(); }   // opening the screen plays its entrance
+  if (v === 'games') { $('#view-games').dataset.ids = ''; renderGames(); loadPlayInfo().then(() => state.view === 'games' && renderGames()).catch(() => {}); }   // opening the screen plays its entrance
+  if (v === 'play') renderPlay().catch(fail);
   $('.top-games').hidden = v !== 'games';
   if (v !== 'games') $('#pathPop').hidden = true;
 }
@@ -1778,7 +1864,243 @@ function warmGameIcons(games) {
 // Games screen, laid out like HOME's game picker: the chosen game's card on the left,
 // your name above every game's cover tile on the right. Upload / Add from PC live in the top bar.
 let gameSel = null;
+/* ---------------- Play: start games in your emulators ---------------- */
+
+const PLAY_FILES = {
+  ryujinx: 'Switch games (*.nsp;*.xci)|*.nsp;*.xci;*.nca;*.nro|All files (*.*)|*.*',
+  sudachi: 'Switch games (*.nsp;*.xci)|*.nsp;*.xci;*.nca;*.nro|All files (*.*)|*.*',
+  citra: '3DS games (*.3ds;*.cci;*.cia;*.cxi;*.3dsx)|*.3ds;*.cci;*.cia;*.cxi;*.3dsx;*.app;*.elf|All files (*.*)|*.*',
+  melonds: 'DS games (*.nds)|*.nds;*.srl;*.dsi|All files (*.*)|*.*',
+  mgba: 'GBA and Game Boy games (*.gba;*.gb;*.gbc)|*.gba;*.gb;*.gbc;*.sgb;*.agb;*.zip;*.7z|All files (*.*)|*.*',
+};
+const pick = (title, filter, start) => api('/api/pick', { body: { title, filter, start } }).then(r => r.path);
+const fileName = p => String(p ?? '').split(/[\\/]/).pop();
+const when = t => t ? new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+let playTimer = null;
+
+// What each game needs to be played (emulator, game file, save), kept for the Games screen too.
+state.play = null;
+async function loadPlayInfo() { state.play = await api('/api/play'); return state.play; }
+const playOf = id => state.play?.games.find(x => x.id === id) ?? null;
+const emuOf = kind => state.play?.emulators.find(e => e.kind === kind) ?? null;
+// Ready = the emulator is there and the game file is chosen (a save that's still PokeVault's copy only warns).
+const playReady = p => !!p && !!emuOf(p.emulator)?.found && p.romFound && !p.running;
+function playWhy(p) {
+  if (!p) return 'Set up how to play it in Emulators.';
+  if (!p.emulator) return p.note || "PokeVault can't start this kind of game.";
+  if (!emuOf(p.emulator)?.found) return `${p.emulatorName} isn't set up yet.`;
+  if (!p.rom) return 'Choose its game file once in Emulators.';
+  if (!p.romFound) return "Its game file isn't there any more. Choose it again in Emulators.";
+  return '';
+}
+
+// Starts a game (from Games or Emulators). A save that's still PokeVault's copy gets a warning first.
+async function startGame(id) {
+  const g = playOf(id) ?? (await loadPlayInfo(), playOf(id));
+  if (!g) return;
+  if (g.saveKind === 'upload' && !confirm(`${g.game} isn't using your save yet: your save is only in PokeVault's copy, so ${g.emulatorName} would start `
+    + `${g.realSave ? 'with the save next to the game file instead' : 'without it (New Game)'}.\n\nLink it first in Emulators with "${g.realSave ? `Use ${fileName(g.realSave)}` : 'Choose the real save…'}".\n\nStart anyway?`)) return;
+  const r = await api(`/api/play/${id}/start`, { method: 'POST' });
+  window.sfx?.select();
+  toast(`Starting ${g.game} in ${r.emulator}…`);
+  setTimeout(() => checkStatus(), 1500);
+}
+// "Set up to play": the Emulators screen, scrolled to that game.
+function setupGame(id) { state.emuFocus = id; setView('play'); }
+
+const SYSTEM_COLORS = { ryujinx: '#e4434f', sudachi: '#e0b021', citra: '#3d7fe0', melonds: '#7c8794', mgba: '#7653d6' };
+const SYSTEM_TAGS = { ryujinx: 'Switch', sudachi: 'Switch', citra: '3DS', melonds: 'DS', mgba: 'GBA' };
+// The emulator's own icon (for 3DS: whichever of Citra, Azahar or Lime3DS you have), or its coloured badge.
+function emuIconFile(kind) {
+  const exe = fileName(emuOf(kind)?.exe ?? '').toLowerCase();
+  if (kind === 'citra') return exe.includes('azahar') ? 'azahar' : exe.includes('lime') ? 'lime3ds' : 'citra';
+  return { ryujinx: 'ryujinx', sudachi: 'sudachi', melonds: 'melonds', mgba: 'mgba' }[kind] ?? null;
+}
+function emuIcon(kind, cls = 'em-ico') {
+  const f = emuIconFile(kind);
+  const tag = esc(SYSTEM_TAGS[kind] ?? '');
+  return f ? `<span class="${cls}" style="--sys:${SYSTEM_COLORS[kind] ?? '#7c8794'}"><img src="assets/emulators/${f}.png" alt="" draggable="false"
+      onerror="this.parentNode.classList.add('noimg');this.remove()"><b>${tag}</b></span>`
+    : `<span class="${cls} noimg" style="--sys:#7c8794"><b>${tag}</b></span>`;
+}
+
+async function renderPlay() {
+  const view = $('#view-play');
+  const d = await loadPlayInfo();
+  if (state.view !== 'play') return;
+  const emu = emuOf;
+  const tick = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  const step = (n, done, warn, title, value, actions = '') => `
+      <li class="em-step ${done ? 'done' : warn ? 'warn' : 'todo'}">
+        <span class="em-n">${done ? tick : n}</span>
+        <div class="em-sv"><small>${title}</small><b title="${esc(value.title ?? '')}">${value.html}</b>${actions ? `<div class="em-acts">${actions}</div>` : ''}</div>
+      </li>`;
+  const btn = (label, attrs, primary) => `<button class="em-btn${primary ? ' primary' : ''}" type="button" ${attrs}>${label}</button>`;
+
+  const gameCard = g => {
+    const e = emu(g.emulator);
+    const ready = playReady(g);
+    const choices = (g.choices ?? []).length > 1
+      ? `<div class="em-choose" role="group" aria-label="Emulator">${g.choices.map(k => `<button type="button" class="${k === g.emulator ? 'on' : ''}"
+          data-emu="${esc(g.id)}" data-kind="${esc(k)}">${emuIcon(k, 'em-mini')}${esc(emu(k)?.name ?? k)}</button>`).join('')}</div>` : '';
+    const s1 = g.emulator
+      ? step(1, e?.found, false, 'Emulator', { html: emuIcon(g.emulator, 'em-mini') + esc(g.emulatorName) + (e?.found ? '' : ' <em>not found</em>') },
+          choices + (e?.found ? '' : btn('Choose program…', `data-exe="${esc(g.emulator)}"`, true)))
+      : step(1, false, true, 'Emulator', { html: `<em>${esc(g.note ?? 'Not supported')}</em>` });
+    const s2 = step(2, g.romFound, g.rom && !g.romFound, 'Game file',
+      { html: g.rom ? esc(fileName(g.rom)) + (g.romFound ? '' : ' <em>missing</em>') : '<em>Not chosen yet</em>', title: g.rom ?? '' },
+      g.emulator ? btn(g.rom ? 'Change…' : 'Choose…', `data-rom="${esc(g.id)}"`, !g.rom) : '');
+    let s3;
+    if (g.saveKind === 'ryujinx' && g.emulator !== 'ryujinx')
+      s3 = step(3, false, true, 'Save', { html: `Ryujinx's save <em>· ${esc(g.emulatorName)} keeps its own</em>`, title: g.savePath });
+    else if (g.saveKind === 'ryujinx') s3 = step(3, true, false, 'Save', { html: `Ryujinx's own save`, title: g.savePath });
+    else if (g.saveKind === 'upload')
+      s3 = step(3, false, true, 'Save', { html: `PokeVault's copy <em>· the game won't see it</em>`, title: g.savePath },
+        (g.realSave ? btn(`Use ${esc(fileName(g.realSave))}`, `data-link="${esc(g.id)}" data-path="${esc(g.realSave)}"`, true) : '')
+        + btn('Choose the real save…', `data-link="${esc(g.id)}"`, !g.realSave && !g.canPlaceSave)
+        + (g.canPlaceSave ? btn('Put it into Citra', `data-place="${esc(g.id)}"`, true) : ''));
+    else s3 = step(3, !g.realSave, !!g.realSave, 'Save', { html: `${esc(fileName(g.savePath))} <em>· ${esc(when(g.saveTime))}</em>`, title: g.savePath },
+        (g.realSave ? btn(`Use ${esc(fileName(g.realSave))}`, `data-link="${esc(g.id)}" data-path="${esc(g.realSave)}"`, true) : '')
+        + btn('Change…', `data-link="${esc(g.id)}"`));
+    const left = [e?.found || !g.emulator, g.romFound, g.saveKind !== 'upload'].filter(x => !x).length;
+    const badge = g.running ? `<span class="em-badge live">● Playing</span>`
+      : ready && g.saveKind !== 'upload' ? `<span class="em-badge ok">${tick} Ready to play</span>`
+      : ready ? `<span class="em-badge warn">Playable · save not linked</span>`
+      : `<span class="em-badge todo">${left} step${left === 1 ? '' : 's'} left</span>`;
+    return `<article class="em-game${ready ? ' ready' : ''}${g.running ? ' running' : ''}" id="em-${esc(g.id)}" style="--sys:${SYSTEM_COLORS[g.emulator] ?? '#7c8794'}">
+      <header class="em-g-head">
+        <span class="em-g-art">${mascotChip(g, true)}</span>
+        <div class="em-g-name"><h3>${esc(g.game)}</h3><small>${esc(g.trainer ?? '')}${g.playTime ? ` · ${esc(g.playTime)}` : ''}</small></div>
+        ${badge}
+        <button class="em-play" data-go="${esc(g.id)}" type="button" ${ready ? '' : 'disabled'} title="${esc(playWhy(g))}">${ico('play')}<span>Play</span></button>
+      </header>
+      <ol class="em-steps">${s1}${s2}${s3}</ol>
+    </article>`;
+  };
+
+  const emuCard = e => `
+    <article class="em-emu ${e.running ? 'running' : e.found ? 'ok' : 'missing'}" style="--sys:${SYSTEM_COLORS[e.kind]}">
+      ${emuIcon(e.kind, 'em-sys')}
+      <div class="em-e-name"><b>${esc(e.name)}</b><small>${esc(e.systems)}</small></div>
+      <span class="em-state">${e.running ? '● Open now' : e.found ? `${tick} Ready` : 'Not on this PC'}</span>
+      <p class="em-path" title="${esc(e.exe ?? '')}">${e.found ? esc(e.exe) : `Get it from <b>${esc(e.getFrom)}</b>, then choose its program.`}</p>
+      ${btn(e.found ? 'Change…' : 'Choose program…', `data-exe="${esc(e.kind)}"`, !e.found)}
+    </article>`;
+
+  const readyCount = d.games.filter(g => playReady(g)).length;
+  view.innerHTML = `
+    <div class="em-wrap">
+      <header class="em-hero">
+        <div><h2>Emulators</h2>
+          <p>Set each game up once: its emulator, its game file and the save it plays. Then press Play in <a href="#" data-to-games>Games</a>. PokeVault pauses while you play and refreshes when you close the game.</p></div>
+        <div class="em-count"><b>${readyCount}/${d.games.length}</b><small>games ready</small></div>
+      </header>
+      <section class="em-sec">
+        <div class="em-sec-head"><h3>Your emulators</h3>${btn('Look again', 'data-redetect')}</div>
+        <div class="em-emus">${d.emulators.map(emuCard).join('')}</div>
+      </section>
+      <section class="em-sec">
+        <div class="em-sec-head"><h3>Your games</h3></div>
+        <div class="em-games">${d.games.map(gameCard).join('') || '<p class="em-none">No games connected yet. Add one in Games.</p>'}</div>
+      </section>
+    </div>`;
+
+  const again = () => renderPlay().catch(fail);
+  const byId = id => d.games.find(x => x.id === id);
+  $('[data-to-games]', view)?.addEventListener('click', e => { e.preventDefault(); setView('games'); });
+  $$('[data-go]', view).forEach(b => b.addEventListener('click', () => run(async () => { await startGame(b.dataset.go); setTimeout(again, 2500); })));
+  $$('[data-emu]', view).forEach(b => b.addEventListener('click', () => run(async () => {
+    if (b.classList.contains('on')) return;
+    await api(`/api/play/${b.dataset.emu}/emulator`, { body: { kind: b.dataset.kind, path: null } });
+    window.sfx?.tick?.();
+    await again();
+  })));
+  $$('[data-rom]', view).forEach(b => b.addEventListener('click', () => run(async () => {
+    const g = byId(b.dataset.rom);
+    const path = await pick(`Choose the game file for ${g.game}`, PLAY_FILES[g.emulator], g.rom);
+    if (!path) return;
+    await api(`/api/play/${g.id}/rom`, { body: { path } });
+    await again();
+  })));
+  $$('[data-exe]', view).forEach(b => b.addEventListener('click', () => run(async () => {
+    const e = emu(b.dataset.exe);
+    const path = await pick(`Choose the ${e.name} program`, `${e.name} (*.exe)|*.exe`, e.exe);
+    if (!path) return;
+    await api('/api/play/emulator', { body: { kind: e.kind, path } });
+    await again();
+  })));
+  $('[data-redetect]', view)?.addEventListener('click', () => run(async () => {
+    for (const e of d.emulators.filter(x => !x.found)) await api('/api/play/emulator', { body: { kind: e.kind, path: null } });
+    await again();
+    toast('Looked for emulators again.');
+  }));
+  $$('[data-place]', view).forEach(b => b.addEventListener('click', () => run(async () => {
+    const g = byId(b.dataset.place);
+    if (!confirm(`Copy PokeVault's ${g.game} save into Citra, and use that file from now on?\n\nCitra will play it, and PokeVault will change it directly (with a backup before every change).`)) return;
+    await api(`/api/play/${g.id}/place-citra`, { method: 'POST' });
+    toast(`${g.game} now uses Citra's save.`);
+    await loadStatus(); await again();
+  })));
+  $$('[data-link]', view).forEach(b => b.addEventListener('click', () => run(async () => {
+    const g = byId(b.dataset.link);
+    const path = b.dataset.path || await pick(`Choose the save file the emulator uses for ${g.game}`, 'Save files (*.sav;main;*.dsv;*.srm)|*.sav;main;*.dsv;*.srm;*.bin|All files (*.*)|*.*', g.rom);
+    if (!path) return;
+    linkSaveDialog(g, path, again);
+  })));
+
+  // came here from "Set up to play" in Games: show that game
+  if (state.emuFocus) {
+    const card = $(`#em-${CSS.escape(state.emuFocus)}`, view);
+    state.emuFocus = null;
+    if (card) { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); card.classList.add('flash'); setTimeout(() => card.classList.remove('flash'), 1800); }
+  }
+  clearTimeout(playTimer);
+  if (d.games.some(g => g.running)) playTimer = setTimeout(() => state.view === 'play' && again(), 4000);   // notice when the game is closed
+}
+
+// Which version wins when an uploaded copy is switched to the emulator's own save.
+async function linkSaveDialog(g, path, after) {
+  const st = await api('/api/pick-info?path=' + encodeURIComponent(path)).catch(() => null);
+  const fileTime = st?.time ? new Date(st.time) : null;
+  const mineNewer = st?.blank || !fileTime || new Date(g.saveTime) >= fileTime;
+  const away = g.away ?? [];
+  const awayText = away.length ? ` ${away.join(', ')} ${away.length === 1 ? 'comes' : 'come'} back to the Vault first, with everything from ${esc(g.game)}.` : '';
+  const canUse = !st?.blank && !st?.problem;
+  const body = showDialog(`<h2>Use the real ${esc(g.game)} save</h2>
+    <p class="trip-note">From now on PokeVault reads and changes <b>${esc(fileName(path))}</b>, the file ${esc(g.emulatorName ?? 'the emulator')} plays.
+      ${st?.blank ? "That file is still empty: the game hasn't been saved in it yet. PokeVault puts your save in it, so the game starts from your save."
+        : st?.problem ? `PokeVault can't read that file (${esc(st.problem)}). It can put your save in it instead.`
+        : 'Which version should it start from?'}</p>
+    <div class="pl-choice">
+      <button class="btn${mineNewer ? '' : ' ghost'}" data-keep="1" type="button">${canUse ? "Keep PokeVault's version" : 'Put my save in it'}<small>last changed ${esc(when(g.saveTime))}. Everything you did in PokeVault goes into the real file (the file is backed up first).</small></button>
+      ${canUse ? `<button class="btn${mineNewer ? ' ghost' : ''}" data-keep="0" type="button">Use the file as it is<small>last saved ${esc(when(fileTime))}${mineNewer ? '' : ', newer'}${st?.trainer ? ` (${esc(st.trainer)})` : ''}. Changes made only in PokeVault's copy are left behind.${awayText}</small></button>` : ''}
+    </div>`);
+  $$('[data-keep]', body).forEach(b => b.addEventListener('click', () => run(async () => {
+    const r = await api(`/api/play/${g.id}/link-save`, { body: { path, keepPokeVault: b.dataset.keep === '1' } });
+    closeDialog();
+    toast(`${g.game} now uses ${fileName(path)}.${r.back?.length ? ` ${r.back.join(', ')} came back to the Vault.` : ''}`);
+    await loadStatus();
+    await after();
+  })));
+}
+
+// Games: the Play button and a line on how the game is played.
+function playButton(g) {
+  const p = playOf(g.id);
+  if (p?.running) return `<button class="btn gs-play" type="button" disabled>${ico('play')} Playing…</button>`;
+  if (playReady(p)) return `<button class="btn gs-play" data-play="${esc(g.id)}" type="button">${ico('play')} Play</button>`;
+  return `<button class="btn gs-play setup" data-setup="${esc(g.id)}" type="button" title="${esc(playWhy(p))}">${ico('play')} Set up to play</button>`;
+}
+function playLine(g) {
+  const p = playOf(g.id);
+  if (!state.play) return '';
+  if (p?.running) return `<p class="gs-playline live">Playing in ${esc(p.running)} now. PokeVault refreshes when you close it.</p>`;
+  if (!playReady(p)) return `<p class="gs-playline">${esc(playWhy(p))}</p>`;
+  return `<p class="gs-playline">Plays in ${emuIcon(p.emulator, 'em-mini')}<b>${esc(p.emulatorName)}</b> · ${esc(fileName(p.rom))}${p.saveKind === 'upload' ? ' · <em>save not linked yet</em>' : ''}</p>`;
+}
+
 function renderGames() {
+  if (!state.play) loadPlayInfo().then(() => state.view === 'games' && renderGames()).catch(() => {});
   const all = state.status?.games ?? [];
   const main = all.filter(g => g.supported && !g.hidden);
   const view = $('#view-games');
@@ -1809,7 +2131,8 @@ function renderGames() {
               <tr><th>Pokémon</th><td>${g.pokemon}</td></tr>
               <tr><th>Last saved on</th><td>${esc(new Date(g.lastWrite).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }))}</td></tr>
             </table>
-            <div class="gs-actions"><button class="btn" data-open="${esc(g.id)}" type="button">Open</button>${moreMenu(g)}</div>
+            <div class="gs-actions">${playButton(g)}<button class="btn ghost" data-open="${esc(g.id)}" type="button">Open</button>${moreMenu(g)}</div>
+            ${playLine(g)}
           </div>` : '<div class="gs-info-head">No games yet</div><p class="gs-none">Use Upload a save or Add from this PC at the top.</p>';
 
   const refresh = async () => { await loadStatus(); renderGames(); };
@@ -1822,6 +2145,8 @@ function renderGames() {
   const bindInfo = scope => {
     coverFallback(scope);
     $$('[data-open]', scope).forEach(b => b.addEventListener('click', () => openGame(b.dataset.open)));
+    $$('[data-play]', scope).forEach(b => b.addEventListener('click', () => run(() => startGame(b.dataset.play))));
+    $$('[data-setup]', scope).forEach(b => b.addEventListener('click', () => setupGame(b.dataset.setup)));
     $$('[data-backups]', scope).forEach(b => b.addEventListener('click', () => {
       b.closest('details')?.removeAttribute('open');
       backupsDialog(b.dataset.backups);
@@ -1865,7 +2190,7 @@ function renderGames() {
         </div>
       </section>
     </div>
-    <div class="gs-foot"><span>${kh(['←', '→'], 'dpad-lr')} choose</span><span>${kh('Enter', 'A')} open</span></div>`;
+    <div class="gs-foot"><span>${kh(['←', '→'], 'dpad-lr')} choose</span><span>${kh('P', 'X')} play</span><span>${kh('Enter', 'A')} open</span></div>`;
 
   coverFallback($('.gs-right', view));
   bindInfo($('.gs-info', view));
@@ -1918,6 +2243,7 @@ function gamesKey(e) {
     return true;
   }
   if (k === 'Enter') { window.sfx?.select(); setView('boxes'); setPane('game'); selectGame(main[i].id).catch(fail); return true; }
+  if (k === 'p') { const id = main[i].id; if (playReady(playOf(id))) run(() => startGame(id)); else setupGame(id); return true; }
   return false;
 }
 
@@ -2081,7 +2407,8 @@ async function loadMeadow(source, focusKey) {
   const [m, data] = await Promise.all([ensureMeadow(), api(url)]);
   if (token !== meadowToken) return; // a newer choice won
   m.setActive(state.view === 'meadow');
-  const mons = data.slots.filter(Boolean).map(x => ({ ...x, key: side === 'vault' ? x.id : `${x.box}:${x.slot}`, side, gameId }));
+  // a Vault Pokémon that's away in an older game is out playing there, not in the Meadow
+  const mons = data.slots.filter(x => x && !(side === 'vault' && x.awayIn)).map(x => ({ ...x, key: side === 'vault' ? x.id : `${x.box}:${x.slot}`, side, gameId }));
   m.setPokemon(mons, focusKey);
   state.meadowSource = source;
 }
@@ -2272,6 +2599,38 @@ const types = Object.keys(TYPE_COLORS).filter(t => t !== 'Stellar');
 for (const sel of ['#typeFilter', '#dexType'])
   $(sel).insertAdjacentHTML('beforeend', types.map(t => `<option>${t}</option>`).join(''));
 
+// The party strip: clicks, the menu and drag & drop, like a box.
+{
+  const row = $('#party .party-slots');
+  const at = e => e.target.closest('.slot');
+  row.addEventListener('click', e => { const s = at(e); if (s) onSlot('party', +s.dataset.index); });
+  row.addEventListener('contextmenu', e => { const s = at(e); if (s && slotMenu('party', +s.dataset.index)) e.preventDefault(); });
+  row.addEventListener('dragstart', e => {
+    const s = at(e);
+    if (!s) return;
+    state.drag = { side: 'party', index: +s.dataset.index };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', 'pokemon');
+  });
+  row.addEventListener('dragend', () => { state.drag = null; $$('.slot.drop').forEach(x => x.classList.remove('drop')); });
+  row.addEventListener('dragover', e => {
+    const s = at(e);
+    if (!s || !state.drag) return;
+    e.preventDefault();
+    $$('.slot.drop').forEach(x => x !== s && x.classList.remove('drop'));
+    s.classList.add('drop');
+  });
+  row.addEventListener('drop', e => {
+    const s = at(e);
+    if (!s || !state.drag) return;
+    e.preventDefault();
+    s.classList.remove('drop');
+    const { side: from, index } = state.drag;
+    state.drag = null;
+    onDrop(from, index, 'party', +s.dataset.index);
+  });
+}
+
 for (const side of ['game', 'vault']) {
   const pane = $(`#pane-${side}`);
   const grid = $('.grid', pane);
@@ -2461,11 +2820,54 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Keep the Ryujinx status and the open game up to date.
-setInterval(async () => {
-  if (state.busy || document.hidden) return;
+/* ---------------- playing a game: pause, then refresh ---------------- */
+
+let playingKey = null;       // the game being played (emulator + game), or null
+let playingPeek = null;      // the session the overlay was dismissed for
+const playKey = p => p ? `${p.emulator}|${p.gameId ?? ''}` : null;
+
+function showPlaying(p) {
+  const el = $('#playing');
+  const g = p?.gameId ? state.status?.games.find(x => x.id === p.gameId) : null;
+  const shown = !!p && playingPeek !== playKey(p);
+  el.hidden = !shown;
+  document.body.classList.toggle('is-playing', !!p);
+  window.sfx?.pauseMusic?.(!!p || state.view === 'meadow');
+  meadow?.setActive(!p && state.view === 'meadow');
+  if (!shown) return;
+  $('.playing-art', el).innerHTML = g ? mascotChip(g, true) : ico('play');
+  $('#playingTitle').textContent = g ? `Playing ${g.game}` : `${p.emulator} is open`;
+  $('.playing-sub', el).textContent = g ? `in ${p.emulator}` : 'Playing a game';
+}
+$('#playingPeek').addEventListener('click', () => { playingPeek = playingKey; $('#playing').hidden = true; });
+
+// Everything a save can change: the game's boxes and party, the Vault (Pokémon brought home), the Pokédex, the Meadow.
+async function refreshEverything() {
+  await refreshAll();
+  if (state.view === 'dex') await loadDex().catch(() => {});
+  await loadPlayInfo().catch(() => {});
+  if (state.view === 'play') await renderPlay().catch(() => {});
+  if (state.view === 'games') renderGames();
+  if (state.view === 'meadow' && state.meadowSource) await loadMeadow(state.meadowSource).catch(() => {});
+}
+
+async function checkStatus() {
+  if (state.busy) return;
   try {
     const { prev, s } = await loadStatus();
+    const key = playKey(s.playing);
+    if (key !== playingKey) {
+      const was = prev?.playing;
+      playingKey = key;
+      showPlaying(s.playing);
+      if (!key && was) {
+        // the game was closed: show what changed in it
+        await refreshEverything();
+        const g = was.gameId ? s.games.find(x => x.id === was.gameId) : null;
+        toast(`Back from ${g?.game ?? was.emulator}. PokeVault is up to date.`);
+        return;
+      }
+    }
     const a = prev?.games.find(g => g.id === state.gameId);
     const b = s.games.find(g => g.id === state.gameId);
     if (state.view === 'boxes' && (a?.lastWrite !== b?.lastWrite || prev?.emulatorRunning !== s.emulatorRunning)) {
@@ -2473,7 +2875,11 @@ setInterval(async () => {
       updateActionBar();
     }
   } catch { /* server stopped */ }
-}, 5000);
+}
+// Check often while a game is open, and right away when you come back to PokeVault.
+setInterval(() => { if (!document.hidden || playingKey) checkStatus(); }, 3000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkStatus(); });
+addEventListener('focus', () => checkStatus());
 
 try { localStorage.removeItem('pv.gameHidden'); } catch { /* old setting, no longer used */ }
 // Open on the Vault (where your stored Pokémon are), or wherever you were last time.

@@ -30,6 +30,9 @@ Windows may show *"Windows protected your PC"* because the installer isn't code-
 - **The Meadow.** Let a box of Pokémon out and walk among them. Day, evening and night; seasons and weather (live from your location if you like); berries and friendship; photo mode.
 - **Send Pokémon back to older games.** PKHeX can't move a Pokémon to an older generation; PokeVault can (Gen 3 to 7). It writes its own older-format copy: same shininess, nature, gender, IVs, EVs, level and nickname, with the closest legal move standing in for any move that game doesn't have. The original waits in the Vault marked **Away**, and when the Pokémon comes back it gets everything back (moves, ability, ball, Tera type, ribbons) plus whatever it did in the older game: levels, evolutions, EVs, new moves and ribbons.
 - **A journey that's true.** Every move PokeVault makes is recorded with the real game it went to, so a Pokémon's story names the actual games it visited and ends with where it is now.
+- **Your party.** Each game's party sits next to its boxes, and party Pokémon move like any other (party, boxes and the Vault). Fold it away when you don't need it.
+- **Play your games from PokeVault.** Press **Play** on the Games screen and the game starts in the emulator you already have: **Ryujinx** or **Sudachi** (Switch), **Citra**, **Azahar** or **Lime3DS** (3DS), **melonDS** (DS) and **mGBA** (GBA and Game Boy). Set each game up once on the **Emulators** screen: its emulator, its game file, and the save it plays (PokeVault can switch an uploaded copy over to the emulator's real save).
+- **Pause and refresh.** While a game is open, PokeVault pauses and leaves that save alone. When you close the game, your boxes, party, Vault and Pokédex refresh by themselves.
 - **Themes and wallpapers**, and **full controller support** on every screen.
 
 ## Where your data lives
@@ -43,7 +46,7 @@ Your Vault is in **`C:\Users\<you>\PokeVault`**. Back this folder up: it *is* yo
 | `backups\` | A copy of each save made before every change (`original_…` is the save before the first change) |
 | `journey.json`, `meadow-bond.json`, `smart-boxes.json` | Journeys, Meadow friendship and saved searches |
 
-**Close Ryujinx before moving Pokémon in or out of a Ryujinx save.** While it's open, those saves are copy-only.
+**Close a game before moving Pokémon in or out of its save.** While its emulator is open, that save is copy-only (PokeVault shows a pause screen and refreshes when you close the game).
 
 ## Build it yourself
 
@@ -58,6 +61,7 @@ The installer is a small .NET Framework 4.8 program (`installer\`) with the self
 
 ## Credits
 
+- **Emulator icons** belong to their projects (Ryujinx, Sudachi, Citra, Azahar, Lime3DS, melonDS, mGBA) and are shown only to identify them. PokeVault doesn't include or download any emulator or game.
 - **[PKHeX.Core](https://github.com/kwsch/PKHeX)** by Kaphotics and contributors (GPL-3.0): reading and writing saves, and converting Pokémon between generations.
 - **Pokémon sprites and renders:** [PokeAPI sprites](https://github.com/PokeAPI/sprites), the [Pokémon Showdown](https://play.pokemonshowdown.com/sprites/) sprite archive, and the [PMD Sprite Collab](https://github.com/PMDCollab/SpriteCollab) (CC BY-NC 4.0) for the Meadow. They're downloaded once and cached.
 - **Ribbon and mark pictures** from PKHeX's resources. **Game box art** from the [Bulbagarden Archives](https://archives.bulbagarden.net). **Berry pictures** from PokeAPI.

@@ -13,7 +13,7 @@ public sealed record GameSource(
     string Game, string Version, int Generation,
     string? Trainer, string? Tid, string? PlayTime, DateTime LastWrite,
     bool Supported, string? Problem,
-    int BoxCount, int SlotsPerBox, int Pokemon, bool CanMove, bool CanRename, bool Hidden = false);
+    int BoxCount, int SlotsPerBox, int Pokemon, bool CanMove, bool CanRename, bool Hidden = false, string? Running = null);
 
 /// <summary>Finds, reads and safely writes every kind of save PKHeX understands.</summary>
 public sealed class GameService
@@ -47,6 +47,9 @@ public sealed class GameService
 
     public static bool EmulatorRunning => Process.GetProcessesByName("Ryujinx").Length > 0;
 
+    /// <summary>Set by the Play section: the name of the emulator that has this game's save open, if any.</summary>
+    public Func<GameSource, string?>? InUse { get; set; }
+
     public string? LastGame
     {
         get => _settings.LastGame;
@@ -67,6 +70,7 @@ public sealed class GameService
         var hidden = _settings.Hidden.ToHashSet();
         return list
             .Select(g => hidden.Contains(g.Id) ? g with { Hidden = true } : g)
+            .Select(g => InUse?.Invoke(g) is { } who ? g with { Running = who } : g)
             .OrderBy(g => g.Hidden)
             .ThenByDescending(g => g.Supported)
             .ThenBy(g => g.Kind switch { "ryujinx" => 0, "path" => 1, _ => 2 })
@@ -243,6 +247,61 @@ public sealed class GameService
         var g = Get(id);
         if (IsRyujinx(g) && EmulatorRunning)
             throw new VaultException("Ryujinx is open. Close Ryujinx completely before moving Pokémon in or out of a Ryujinx save, otherwise the game would overwrite the change.");
+        if (g.Running is { } who)
+            throw new VaultException($"{who} is open. Save in the game and close {who} first, otherwise it would overwrite the change to {g.Game}.");
+    }
+
+    /// <summary>
+    /// Switches an uploaded copy over to the save file the emulator really plays. With
+    /// <paramref name="keepPokeVault"/> the copy's contents (everything done in PokeVault) are written
+    /// into that file first (the file is backed up); otherwise the file is used as it is.
+    /// The game keeps its id, so trips, Play settings and "last game" carry over.
+    /// </summary>
+    public GameSource Relink(string id, string path, bool keepPokeVault)
+    {
+        var g = Get(id);
+        if (g.Kind == "ryujinx") throw new VaultException("Ryujinx saves are already the real ones.");
+        path = Path.GetFullPath(path.Trim().Trim('"'));
+        if (!File.Exists(path)) throw new VaultException("No file at that path.");
+        if (string.Equals(path, g.Path, StringComparison.OrdinalIgnoreCase)) return g;
+        if (List().FirstOrDefault(x => x.Id != id && string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase)) is { } other)
+            throw new VaultException($"That save is already connected as {other.Game} ({other.Trainer}).");
+        if (g.Running is { } who) throw new VaultException($"Close {who} first.");
+
+        var bytes = File.ReadAllBytes(path);
+        if (IsBlankSave(bytes))
+        {
+            // An emulator makes an empty save before the game has ever saved: nothing to read, nothing to lose.
+            if (!keepPokeVault)
+                throw new VaultException("That save is empty (the game was never saved in it), so there's nothing to use yet. Keep PokeVault's version instead.");
+        }
+        else
+        {
+            var real = Parse(bytes, path);
+            var mine = LoadForReading(id);
+            if (real.Generation != mine.Generation)
+                throw new VaultException($"That's a {GameName(real)} save (Gen {real.Generation}), not {g.Game}.");
+            if (real.TID16 != mine.TID16 || real.SID16 != mine.SID16)
+                throw new VaultException($"That save belongs to another trainer ({real.OT}, ID {real.DisplayTID}), not {mine.OT}.");
+        }
+
+        if (keepPokeVault)
+        {
+            var linked = g with { Path = path, Kind = "path" };
+            EnsureOriginalBackup(linked);
+            Backup(linked, path);
+            WriteAtomic(path, File.ReadAllBytes(g.Path));
+        }
+        _settings.Uploads.RemoveAll(u => u.Id == id);   // the uploaded file itself stays where it is
+        _settings.Paths.RemoveAll(p => p.Id == id);
+        _settings.Paths.Add(new AddedPath { Id = id, Path = path });
+        WriteSettings();
+        _cache.Remove(g.Path);
+        _cache.Remove(path);
+        var now = Get(id);
+        // what's in the linked file now is the starting point for catch alerts, not a pile of new catches
+        try { _watcher.Observe(id, now.Game, Parse(File.ReadAllBytes(path), path), silent: true); } catch { /* alerts only */ }
+        return now;
     }
 
     private static bool IsRyujinx(GameSource g) =>
@@ -280,6 +339,23 @@ public sealed class GameService
         _watcher.Observe(g.Id, g.Game, sav, silent: true);
         _cache.Remove(g.Path);
         PruneBackups();
+    }
+
+    /// <summary>A save file an emulator created but the game never wrote to (all 0xFF or all 0x00).</summary>
+    public static bool IsBlankSave(byte[] data) =>
+        data.Length >= 0x2000 && (data.All(b => b == 0xFF) || data.All(b => b == 0x00));
+
+    /// <summary>What a file on disk is, for the page to explain before linking it.</summary>
+    public static (bool Blank, string? Game, string? Trainer, string? Problem) Inspect(string path)
+    {
+        try
+        {
+            var data = File.ReadAllBytes(path);
+            if (IsBlankSave(data)) return (true, null, null, null);
+            var sav = Parse(data, path);
+            return (false, GameName(sav), sav.OT, null);
+        }
+        catch (Exception ex) { return (false, null, null, ex is VaultException ? ex.Message : "PokeVault couldn't open that file."); }
     }
 
     private static SaveFile Parse(byte[] data, string path)
