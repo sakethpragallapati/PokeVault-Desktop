@@ -78,6 +78,9 @@ public sealed class MoveDataService(AppPaths paths)
         return best.ToDictionary(x => x.Key, x => x.Value.Text);
     }
 
+    /// <summary>The move table if it has been fetched before; never goes online.</summary>
+    public Dictionary<string, object[]>? Cached() => File.Exists(_file) ? Read() : null;
+
     private Dictionary<string, object[]>? Read()
     {
         try { return JsonSerializer.Deserialize<Dictionary<string, object[]>>(File.ReadAllText(_file)); }

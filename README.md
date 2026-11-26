@@ -28,6 +28,8 @@ Windows may show *"Windows protected your PC"* because the installer isn't code-
 - **Shareable cards.** A card for any Pokémon and a retro **Trainer card**, saved as PNG or copied.
 - **Save backups.** Every save is backed up before PokeVault changes it, and can be restored from the Games screen.
 - **The Meadow.** Let a box of Pokémon out and walk among them. Day, evening and night; seasons and weather (live from your location if you like); berries and friendship; photo mode.
+- **Send Pokémon back to older games.** PKHeX can't move a Pokémon to an older generation; PokeVault can (Gen 3 to 7). It writes its own older-format copy: same shininess, nature, gender, IVs, EVs, level and nickname, with the closest legal move standing in for any move that game doesn't have. The original waits in the Vault marked **Away**, and when the Pokémon comes back it gets everything back (moves, ability, ball, Tera type, ribbons) plus whatever it did in the older game: levels, evolutions, EVs, new moves and ribbons.
+- **A journey that's true.** Every move PokeVault makes is recorded with the real game it went to, so a Pokémon's story names the actual games it visited and ends with where it is now.
 - **Themes and wallpapers**, and **full controller support** on every screen.
 
 ## Where your data lives

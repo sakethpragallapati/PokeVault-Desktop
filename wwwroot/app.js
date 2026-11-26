@@ -360,6 +360,10 @@ function render(side) {
       if (!m.isEgg) b.insertAdjacentHTML('beforeend', `<span class="lv">${m.level}</span>`);
       if (m.shiny) b.insertAdjacentHTML('beforeend', '<span class="star">★</span>');
       if (m.locked) b.classList.add('locked');
+      if (side === 'vault' && m.awayIn) {
+        b.classList.add('away');
+        b.insertAdjacentHTML('beforeend', `<span class="away-tag">Away</span>`);
+      }
       if (state.select?.side === side && state.select.items.has(key(side, m))) {
         b.classList.add('picked');
         b.insertAdjacentHTML('beforeend', '<span class="tick">✓</span>');
@@ -375,7 +379,7 @@ function render(side) {
     }
     if (side === state.pane && i === state.cursor && !state.cursorHidden) b.classList.add('cursor');
     if (i < (size % 6 === 0 ? 6 : 5)) b.classList.add('top-row');
-    if (m) b.dataset.tip = m.isEgg ? 'Egg' : `${name(m)} (Lv. ${m.level})`;
+    if (m) b.dataset.tip = (m.isEgg ? 'Egg' : `${name(m)} (Lv. ${m.level})`) + (side === 'vault' && m.awayIn ? ` · away in ${m.awayIn}` : '');
     grid.append(b);
   }
   $$('.tool[data-act="select"]', pane).forEach(t => t.classList.toggle('on', state.select?.side === side));
@@ -521,7 +525,7 @@ function onDrop(fromSide, fromIndex, toSide, toIndex) {
   const target = state.slots[toSide][toIndex];
   if (!m) return;
   if (fromSide === 'game' && toSide === 'vault') {
-    if (target) return toast('Drop it on an empty vault slot.');
+    if (target && !target.awayIn) return toast('Drop it on an empty vault slot.');   // or on its own AWAY slot
     deposit([m], false, state.box.vault, toIndex);
   } else if (fromSide === 'vault' && toSide === 'game') {
     if (target) return toast(`Drop it on an empty slot in ${game()?.game}.`);
@@ -556,7 +560,11 @@ const deposit = (mons, copy, vaultBox, vaultSlot) => run(async () => {
   closeSheet(); endSelect();
   if (r.done.length) window.sfx?.place();
   if (r.box != null) state.box.vault = r.box;
-  if (r.done.length) toast(r.done.length === 1
+  const home = (r.trips ?? []).filter(t => t.back);
+  if (home.length && !copy) toast(home.length === 1 && r.done.length === 1
+    ? `${home[0].name} is back from ${home[0].game}, with everything it did there.`
+    : `${r.done.length} Pokémon moved to the Vault (${home.length} back from a trip, with their progress).`);
+  else if (r.done.length) toast(r.done.length === 1
     ? `${name(r.done[0])} was ${copy ? 'copied' : 'moved'} to the Vault.`
     : `${r.done.length} Pokémon ${copy ? 'copied' : 'moved'} to the Vault.`);
   reportSkips(r, copy ? 'copied' : 'moved');
@@ -569,10 +577,24 @@ const withdraw = (ids, box, slot) => run(async () => {
   closeSheet(); endSelect();
   if (r.done.length) window.sfx?.place();
   if (r.box != null) state.box.game = r.box;
-  if (r.done.length) toast(r.done.length === 1 ? `${name(r.done[0])} was sent to ${g.game}.` : `${r.done.length} Pokémon sent to ${g.game}.`);
+  const trips = (r.trips ?? []).filter(t => !t.back);
+  if (trips.length && !r.skipped?.length) tripDialog(trips, g.game);
+  else if (r.done.length) toast(r.done.length === 1 ? `${name(r.done[0])} was sent to ${g.game}.` : `${r.done.length} Pokémon sent to ${g.game}.`);
   reportSkips(r, 'sent');
   await refreshAll();
 });
+
+// A Pokémon sent to an older game: what changed for the trip, and that the original waits in the Vault.
+function tripDialog(trips, game) {
+  const one = trips.length === 1;
+  showDialog(`<h2>${one ? `${esc(trips[0].name)} is visiting ${esc(game)}` : `${trips.length} Pokémon are visiting ${esc(game)}`}</h2>
+    <p class="trip-note">${one ? 'The original stays in the Vault, marked Away' : 'The originals stay in the Vault, marked Away'}.
+      Bring ${one ? 'it' : 'them'} back to the Vault and ${one ? 'it gets' : 'they get'} everything back: moves, ability, ball,
+      Tera type and ribbons, plus anything new from ${esc(game)} (levels, evolutions, EVs, new moves, ribbons).</p>
+    ${trips.some(t => t.swaps.length) ? `<ul class="skips">${trips.filter(t => t.swaps.length).map(t =>
+      `<li><b>${esc(t.name)}</b>: ${t.swaps.map(s => `${esc(s.from)} → ${esc(s.to)}`).join(', ')}</li>`).join('')}</ul>
+      <p class="trip-note">${esc(game)} doesn't have ${trips.reduce((n, t) => n + t.swaps.length, 0) === 1 ? 'that move' : 'those moves'}, so the closest ${trips.reduce((n, t) => n + t.swaps.length, 0) === 1 ? 'one' : 'ones'} it can learn there stand in for now.</p>` : ''}`);
+}
 
 const vaultMove = (id, box, slot) => run(async () => {
   await api('/api/vault/move', { body: { id, box, slot } });
@@ -667,7 +689,10 @@ async function putDown(side, i) {
     if (gameId !== state.gameId) { toast('To move between games, put it in the Vault first, then send it on.'); return; }
     endPick(); await gameMove(mon.box, mon.slot, state.box.game, i); return;
   }
-  if (target) { toast('Moving between a game and the Vault needs an empty slot. Pick an empty one.'); return; }
+  // a game Pokémon may also land on an AWAY slot: that's where its original waits (the server checks it's the one)
+  if (target && !(from === 'game' && side === 'vault' && target.awayIn)) {
+    toast('Moving between a game and the Vault needs an empty slot. Pick an empty one.'); return;
+  }
   endPick();
   if (from === 'game') {                                            // game → Vault
     if (gameId !== state.gameId) await selectGame(gameId);
@@ -777,6 +802,8 @@ function hexChart(stats) {
 
 let menu = null;
 const MENU_ITEMS = [['move', 'Move'], ['summary', 'Check Summary'], ['quit', 'Quit']];
+const menuItems = (side, m) => side === 'vault' && m.awayIn
+  ? [['move', 'Move'], ['summary', 'Check Summary'], ['endtrip', 'Stop waiting'], ['quit', 'Quit']] : MENU_ITEMS;
 
 function openMonMenu(side, i, m) {
   closeMonMenu(true);
@@ -785,8 +812,10 @@ function openMonMenu(side, i, m) {
   const el = document.createElement('div');
   el.className = 'mon-menu';
   el.setAttribute('role', 'menu');
-  el.innerHTML = `<div class="mm-head">${esc(m.isEgg ? 'Egg' : `${name(m)} (Lv. ${m.level})`)}</div>` +
-    MENU_ITEMS.map(([a, l], k) => `<button type="button" role="menuitem" data-a="${a}" data-k="${k}" class="${k === 0 ? 'on' : ''}">${l}</button>`).join('');
+  const items = menuItems(side, m);
+  el.innerHTML = `<div class="mm-head">${esc(m.isEgg ? 'Egg' : `${name(m)} (Lv. ${m.level})`)}${side === 'vault' && m.awayIn
+      ? `<small>Away in ${esc(m.awayIn)}</small>` : ''}</div>` +
+    items.map(([a, l], k) => `<button type="button" role="menuitem" data-a="${a}" data-k="${k}" class="${k === 0 ? 'on' : ''}">${l}</button>`).join('');
   document.body.append(el);
   const r = slot.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
   let left = r.right + 12, from = 'right';
@@ -794,14 +823,14 @@ function openMonMenu(side, i, m) {
   el.style.left = `${Math.max(10, left)}px`;
   el.style.top = `${Math.max(10, Math.min(innerHeight - h - 10, r.top + r.height / 2 - h / 2))}px`;
   el.classList.add(from);
-  menu = { side, i, m, el, k: 0 };
+  menu = { side, i, m, el, k: 0, items };
   el.addEventListener('pointerover', e => { const b = e.target.closest('button[data-k]'); if (b) menuFocus(+b.dataset.k); });
   el.addEventListener('click', e => { const b = e.target.closest('button[data-a]'); if (b) menuDo(b.dataset.a); });
   window.sfx?.menu?.();
 }
 function menuFocus(k) {
   if (!menu) return;
-  k = (k + MENU_ITEMS.length) % MENU_ITEMS.length;
+  k = (k + menu.items.length) % menu.items.length;
   if (k === menu.k) return;
   menu.k = k;
   $$('button[data-k]', menu.el).forEach(b => b.classList.toggle('on', +b.dataset.k === k));
@@ -824,6 +853,15 @@ function menuDo(a) {
     if (m.locked) return toast('The game has locked that slot.', true);
     grab(side, m);
   } else if (a === 'summary') openSummary(side, m);
+  else if (a === 'endtrip') {
+    if (!confirm(`Stop waiting for ${name(m)} to come back from ${m.awayIn}?\n\nThis one in the Vault is unlocked as it is now. `
+      + `The copy in ${m.awayIn} becomes a separate Pokémon, and moving it to the Vault later adds it as a new one.`)) return;
+    run(async () => {
+      await api(`/api/vault/${encodeURIComponent(m.id)}/end-trip`, { method: 'POST' });
+      toast(`${name(m)} is no longer waiting for ${m.awayIn}.`);
+      await refreshAll();
+    });
+  }
 }
 document.addEventListener('pointerdown', e => {
   if (menu && !menu.el.contains(e.target) && !e.target.closest('.slot')) closeMonMenu(true);
@@ -1171,50 +1209,89 @@ const journeyDate = d => d ? d.toLocaleDateString(undefined, { year: 'numeric', 
 // The generation each kind of Pokémon data belongs to.
 const FORMAT_GEN = { PK1: 1, PK2: 2, PK3: 3, CK3: 3, XK3: 3, PK4: 4, BK4: 4, RK4: 4, PK5: 5, PK6: 6, PK7: 7, PB7: 7, PK8: 8, PB8: 8, PA8: 8, PK9: 9, PA9: 9 };
 
-// The road a Pokémon must have taken from the game it was met in to where it is now: the games' own
-// transfer services (Pal Park, Poké Transfer, Poké Transporter and Bank, HOME). Which exact games it visited
-// on the way isn't stored in the Pokémon, so each stop names a game of that generation you have, as an example.
-function routeSteps(m, here) {
-  const from = m.generation, to = FORMAT_GEN[m.format];
-  if (!from || !to || m.isEgg) return [];
-  const mine = gens => [...new Set((state.status?.games ?? []).filter(g => g.supported && gens.includes(g.generation)).map(g => g.game))];
-  const eg = gens => { const n = mine(gens); return n.length ? ` · e.g. ${n.slice(0, 2).join(', ')}` : ''; };
+// The generation of a game by its name, from your connected games (0 if it isn't one of them).
+const genOfGame = name => (state.status?.games ?? []).find(g => g.game === name)?.generation ?? 0;
+
+// The road from the game it was met in to the first game PokeVault saw it in. That stretch isn't recorded
+// anywhere, so each generation in between is one of your games of that generation, or the games it could have been.
+// Everything after that is what PokeVault recorded as it happened.
+function routeSteps(m, fromGen, toGen) {
+  if (!fromGen || !toGen || toGen <= fromGen || m.isEgg) return [];
   const steps = [];
-  const stop = (text, small, kind = 'route') => steps.push({ t: null, kind, text, small });
-  // An older Pokémon now in Gen 8/9 data without a HOME tracker was converted straight across (PKHeX or PokeVault).
-  if (to >= 8 && from <= 7 && !m.homeTracked) {
-    stop(`Moved straight from Gen ${from} to Gen ${to}`, 'Converted directly by PokeVault or PKHeX, not through Pokémon Bank or HOME');
-  } else {
-    if (from <= 2 && to >= 7) stop('Gen 7 · Pokémon Bank', 'Sent from the 3DS Virtual Console with Poké Transporter');
-    else {
-      if (from <= 3 && to >= 4) stop(`Gen 4${eg([4])}`, 'Brought over with Pal Park or Pokétransfer');
-      if (from <= 4 && to >= 5) stop(`Gen 5${eg([5])}`, 'Brought over with Poké Transfer');
-      if (from <= 5 && to >= 6) stop(`Gen 6–7${eg([6, 7])}`, 'Brought over with Poké Transporter and Pokémon Bank');
-      else if (from === 6 && to >= 7) stop(`Gen 7${eg([7])}`, 'Brought over with Pokémon Bank');
-    }
-    if (to >= 8 && (from <= 7 || from < to || m.homeTracked)) stop('Pokémon HOME', m.homeTracked ? 'It carries a HOME tracker' : 'Moved through HOME', 'home');
+  const yours = gen => (state.status?.games ?? []).find(g => g.supported && g.generation === gen && g.game !== m.origin)?.game;
+  const GEN_GAMES = { 4: 'Diamond, Pearl, Platinum, HeartGold or SoulSilver', 5: 'Black, White, Black 2 or White 2',
+    6: 'X, Y, Omega Ruby or Alpha Sapphire', 7: 'Sun, Moon, Ultra Sun or Ultra Moon' };
+  const stop = gen => steps.push({ t: null, kind: 'route', text: `Traveled to ${yours(gen) ?? GEN_GAMES[gen]}` });
+  if (fromGen <= 2 && toGen >= 7) stop(7);
+  else {
+    if (fromGen <= 3 && toGen >= 4) stop(4);
+    if (fromGen <= 4 && toGen >= 5) stop(5);
+    if (fromGen <= 5 && toGen >= 6) stop(6);
+    if (fromGen <= 6 && toGen >= 7) stop(7);
   }
-  if (here) stop(`Now in ${here}`, to ? `Gen ${to} data` : '', 'here');
+  if (toGen >= 8) steps.push({ t: null, kind: 'home', text: 'Traveled through Pokémon HOME' });
   return steps;
 }
 
-// Where it was met (from its own data), the road it took to get here, then everything PokeVault logged since.
+// The whole story: where it was met, how it got to the first game PokeVault saw it in, every move since,
+// and finally where it is now: arrived in a game, or entered the Vault.
 async function journeySteps(m, side) {
-  const head = [];
-  if (m.metLocation || m.metDate) head.push({
+  const steps = [];
+  const j = m.uid ? await api(`/api/journey/${encodeURIComponent(m.uid)}`).catch(() => null) : null;
+  const here0 = side === 'game' ? game()?.game : null;
+  if (j?.original) m = j.original;    // a copy on a trip: tell the original's story
+  if (m.metLocation || m.metDate) steps.push({
     t: m.metDate ? new Date(`${m.metDate}T00:00:00`) : null, kind: 'met',
     text: `Met in ${m.origin || 'its first game'}${m.metLocation ? ` at ${m.metLocation}` : ''}${m.metLevel ? `, Lv. ${m.metLevel}` : ''}`,
   });
-  const cameFrom = side === 'vault' ? (m.source || '').split('·')[0].trim() : null;
-  const here = side === 'game' ? game()?.game : cameFrom && !/import|recover/i.test(cameFrom) ? cameFrom : null;
-  head.push(...routeSteps(m, here));
-  const logged = m.uid ? await api(`/api/journey/${encodeURIComponent(m.uid)}`).catch(() => []) : [];
-  const timed = [];
-  if (m.added && m.source && !logged.some(s => s.kind === 'vault' || s.kind === 'import'))
-    timed.push({ t: new Date(m.added), kind: 'vault', text: `Entered the Vault from ${m.source}` });
-  for (const s of logged) timed.push({ t: new Date(s.time), kind: s.kind, text: s.text });
-  timed.sort((a, b) => a.t - b.t);
-  return [...head, ...timed];
+  const logged = (Array.isArray(j) ? j : j?.steps ?? [])
+    .map(s => {
+      // steps saved by older versions only have the sentence; read the game out of it
+      let g = s.game;
+      if (!g) g = (s.text.match(/^(?:Copied|Moved) from (.+) into the Vault/) ?? s.text.match(/^Sent from the Vault to (.+)$/)
+        ?? s.text.match(/^Turned up in (.+?)(?: \(.*\))?$/))?.[1] ?? null;
+      const copy = s.kind === 'vault' && /^Copied/.test(s.text);
+      return { ...s, game: g, gen: s.gen || genOfGame(g), copy, t: new Date(s.time) };
+    }).sort((a, b) => a.t - b.t);
+  const source = (m.source || '').split('·')[0].trim();                 // "Scarlet · Alex" → "Scarlet"
+  const fromImport = /import|recover/i.test(source);
+  const here = here0;
+
+  // the first game PokeVault knows it was in, and that game's generation
+  const preVault = logged[0]?.kind === 'game' && !!source && !fromImport;   // in the Vault before moves were written down
+  const first = preVault ? null : logged.find(s => s.game);
+  const firstGame = first?.game ?? ((side === 'vault' || preVault) && source && !fromImport ? source : here);
+  const firstGen = first?.gen || genOfGame(firstGame) || FORMAT_GEN[m.format] || 0;
+  steps.push(...routeSteps(m, m.generation, firstGen));
+
+  // it was already in the Vault before PokeVault started writing moves down
+  let lastPlace = null;
+  if (preVault) {
+    steps.push({ t: m.added ? new Date(m.added) : null, kind: 'vault', text: `Entered the Vault from ${source}` });
+    lastPlace = 'vault';
+  }
+
+  // every move PokeVault recorded, in plain words
+  for (const s of logged) {
+    if (s.kind === 'caught') {
+      if (s.game && s.game !== m.origin && s.game !== lastPlace) steps.push({ t: s.t, kind: 'game', text: `Arrived in ${s.game}` });
+      lastPlace = s.game;
+    } else if (s.kind === 'vault') {
+      if (lastPlace === 'vault' && s.copy) continue;                     // another copy of what's already there
+      if (lastPlace === 'vault' && steps.at(-1)?.copy) steps.pop();       // copied first, then moved for real
+      steps.push({ t: s.t, kind: 'vault', text: s.game ? `${s.copy ? 'Copied into' : 'Entered'} the Vault from ${s.game}` : 'Entered the Vault', copy: s.copy });
+      lastPlace = 'vault';
+    }
+    else if (s.kind === 'game') { steps.push({ t: s.t, kind: 'game', text: s.game ? `Arrived in ${s.game}` : 'Left the Vault' }); lastPlace = s.game; }
+    else if (s.kind === 'import') { steps.push({ t: s.t, kind: 'import', text: 'Imported into the Vault' }); lastPlace = 'vault'; }
+    else steps.push({ t: s.t, kind: s.kind, text: s.text });
+  }
+
+  // where it is now
+  if (side === 'vault' && lastPlace !== 'vault' && !m.awayIn)   // one that's away is in that game right now
+    steps.push({ t: m.added ? new Date(m.added) : null, kind: 'vault', text: fromImport ? 'Imported into the Vault' : source ? `Entered the Vault from ${source}` : 'Entered the Vault' });
+  if (side === 'game' && here && here !== m.origin && lastPlace !== here) steps.push({ t: null, kind: 'here', text: `Arrived in ${here}` });
+  return steps;
 }
 
 async function togglePanel(kind) {
@@ -1236,8 +1313,7 @@ async function togglePanel(kind) {
   if (!panel.isConnected || sum.list[sum.i] !== m) return;
   $('.sm-rbbody', panel).innerHTML = steps.length ? `<ol class="sm-journey">${steps.map((s, k) => `
       <li style="--d:${k * 60}ms"><span class="jn-ico">${JOURNEY_ICONS[s.kind] ?? '•'}</span>
-        <div><b>${esc(s.text)}</b><small>${esc(s.small ?? journeyDate(s.t))}</small></div></li>`).join('')}</ol>
-      <p class="sm-jn-note">The road between games is worked out from where it was met and the kind of data it has now. The exact games it visited on the way aren't stored in the Pokémon, so the examples are games of that generation you have. Moves made with PokeVault are logged as they happen.</p>`
+        <div><b>${esc(s.text)}</b>${(s.small ?? journeyDate(s.t)) ? `<small>${esc(s.small ?? journeyDate(s.t))}</small>` : ''}</div></li>`).join('')}</ol>`
     : '<p class="sm-rbnone">Nothing recorded yet.</p>';
 }
 

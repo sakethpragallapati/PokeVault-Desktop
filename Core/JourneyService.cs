@@ -2,8 +2,11 @@ using System.Text.Json;
 
 namespace PokeVault.Core;
 
-/// <summary>One stop on a Pokémon's journey: when, what kind ("caught", "vault", "game", "import", "release") and a sentence.</summary>
-public sealed record JourneyStep(DateTime Time, string Kind, string Text);
+/// <summary>
+/// One stop on a Pokémon's journey: when, what kind ("caught", "vault", "game", "import", "release"), a sentence,
+/// and the game involved with its generation (so the story can name the real games it went through).
+/// </summary>
+public sealed record JourneyStep(DateTime Time, string Kind, string Text, string? Game = null, int Gen = 0);
 
 /// <summary>
 /// The log of everything PokeVault did with each Pokémon, keyed by its permanent identity
@@ -29,18 +32,18 @@ public sealed class JourneyService
         lock (_lock) return _log.TryGetValue(uid, out var l) ? l.ToArray() : [];
     }
 
-    public void Add(string uid, string kind, string text) => AddMany([(uid, kind, text)]);
+    public void Add(string uid, string kind, string text, string? game = null, int gen = 0) => AddMany([(uid, kind, text, game, gen)]);
 
-    public void AddMany(IEnumerable<(string Uid, string Kind, string Text)> steps)
+    public void AddMany(IEnumerable<(string Uid, string Kind, string Text, string? Game, int Gen)> steps)
     {
         lock (_lock)
         {
             var now = DateTime.Now;
-            foreach (var (uid, kind, text) in steps)
+            foreach (var (uid, kind, text, game, gen) in steps)
             {
                 if (string.IsNullOrEmpty(uid)) continue;
                 var l = _log.TryGetValue(uid, out var x) ? x : _log[uid] = [];
-                l.Add(new JourneyStep(now, kind, text));
+                l.Add(new JourneyStep(now, kind, text, game, gen));
                 if (l.Count > MaxStepsPerMon) l.RemoveRange(0, l.Count - MaxStepsPerMon);
             }
             try

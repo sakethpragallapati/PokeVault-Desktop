@@ -290,11 +290,11 @@ app.MapPost("/api/vault/move-many", (MoveManyRequest r) => Run(() => new { moved
 app.MapPost("/api/vault/release", (IdsRequest r) => Run(() =>
 {
     int n = 0;
-    var steps = new List<(string, string, string)>();
+    var steps = new List<(string, string, string, string?, int)>();
     foreach (var id in r.Ids)
-        if (vault.Find(id) is { } e)
+        if (vault.Find(id) is { } e && e.Away is null)   // one that's away in an older game has to come back first
         {
-            if (vault.Info(e) is { } info) steps.Add((info.Uid, "release", "Released from the Vault"));
+            if (vault.Info(e) is { } info) steps.Add((info.Uid, "release", "Released from the Vault", null, 0));
             vault.Remove(e, released: true); n++;
         }
     vault.Persist();
@@ -358,7 +358,7 @@ app.MapPost("/api/vault/import", async (HttpRequest req) =>
             if (pk is null || pk.Species == 0 || !pk.ChecksumValid) { skipped.Add(name); continue; }
             var (b, s) = vault.FirstEmpty();
             vault.Add(pk, b, s, "Imported file");
-            journey.Add(CatchWatcher.Identity(pk), "import", $"Imported into the Vault from {name}");
+            journey.Add(CatchWatcher.Identity(pk), "import", "Imported into the Vault", null, pk.Format);
             added++;
         }
         vault.Persist();
@@ -474,7 +474,23 @@ app.MapGet("/api/bond/{uid}", (string uid) => Run(() => { var b = bonds.Get(uid)
 app.MapPost("/api/bond/{uid}", (string uid, BondRequest r) => Run(() => { var b = bonds.Add(uid, r.Kind, r.Delta); return new { b.Points, b.Hearts, b.Pets, b.Treats }; }));
 
 // A Pokémon's journey: what PokeVault has done with it (by its permanent identity).
-app.MapGet("/api/journey/{uid}", (string uid) => Run(() => journey.For(uid)));
+// A copy visiting an older game shares the original's story (and its real "met" details).
+app.MapGet("/api/journey/{uid}", (string uid) => Run(() =>
+{
+    var home = vault.All.FirstOrDefault(e => e.Away?.CopyUid == uid);
+    var original = home is null ? null : vault.Info(home);
+    return new { steps = journey.For(original?.Uid ?? uid), original };
+}));
+
+// Stop waiting for a Pokémon that's away: the original is unlocked and the copy in the older game becomes its own Pokémon.
+app.MapPost("/api/vault/{id}/end-trip", (string id) => Run(() =>
+{
+    var e = vault.Find(id) ?? throw new VaultException("That Pokémon isn't in the vault any more.");
+    e.Away = null;
+    vault.Touch(e);
+    vault.Persist();
+    return new { ok = true };
+}));
 
 // Where to catch a species in each connected game (PKHeX's encounter tables).
 var encounters = app.Services.GetRequiredService<EncounterService>();

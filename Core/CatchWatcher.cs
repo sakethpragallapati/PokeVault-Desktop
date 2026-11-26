@@ -79,7 +79,7 @@ public sealed class CatchWatcher
                     try { info = MonDescriber.Describe(pk, box, slot); } catch { continue; }
                     var where = box < 0 ? "party" : GameService.BoxName(sav, box);
                     _events.Add(new CatchEvent(++_seq, DateTime.Now, gameId, game, info, where, firstThisRun));
-                    _journey.Add(k, "caught", $"Turned up in {game} ({(box < 0 ? "party" : where)})");
+                    _journey.Add(k, "caught", $"Arrived in {game}", game, sav.Generation);
                 }
                 if (_events.Count > KeepEvents) _events.RemoveRange(0, _events.Count - KeepEvents);
             }

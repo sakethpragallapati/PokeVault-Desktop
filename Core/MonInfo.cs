@@ -17,7 +17,7 @@ public sealed record MonInfo(
     string Format, double HeightM, double WeightKg, string SpriteId, string? FormName, bool Locked, string? Source, DateTime? Added,
     RibbonView[] Ribbons, string? Characteristic, string? Title,
     int Pokerus, string? Gimmick, int[] Markings,
-    string Uid, bool HomeTracked);
+    string Uid, bool HomeTracked, string? AwayIn = null);
 
 public static class MonDescriber
 {

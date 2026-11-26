@@ -13,6 +13,8 @@ public sealed class VaultEntry
     public string File { get; set; } = "";
     public DateTime Added { get; set; }
     public string Source { get; set; } = "";
+    /// <summary>Set while a copy of this Pokémon is visiting an older game; the original waits here, locked.</summary>
+    public AwayTrip? Away { get; set; }
 }
 
 public sealed class VaultBox
@@ -80,12 +82,12 @@ public sealed class VaultService
     public MonInfo? Info(VaultEntry e)
     {
         if (_info.TryGetValue(e.Id, out var cached))
-            return cached with { Box = e.Box, Slot = e.Slot };
+            return cached with { Box = e.Box, Slot = e.Slot, AwayIn = e.Away?.Game };
         try
         {
             var info = MonDescriber.Describe(Read(e), e.Box, e.Slot, e);
             _info[e.Id] = info;
-            return info;
+            return info with { AwayIn = e.Away?.Game };
         }
         catch (VaultException) { return null; }
     }
@@ -156,6 +158,25 @@ public sealed class VaultService
         Register(pk);
         return e;
     }
+
+    /// <summary>Writes a new version of a Pokémon that stays in its slot (the old file goes to data/withdrawn).</summary>
+    public void Replace(VaultEntry e, PKM pk)
+    {
+        var old = FilePath(e);
+        var file = $"{e.Id}.{pk.Extension}";
+        var tmp = Path.Combine(_paths.MonDir, file + ".tmp");
+        File.WriteAllBytes(tmp, ToBytes(pk));
+        if (File.Exists(old))
+            File.Copy(old, Path.Combine(_paths.WithdrawnDir, $"{DateTime.Now:yyyyMMdd_HHmmss}_before-return_{e.File}"), overwrite: true);
+        if (!string.Equals(file, e.File, StringComparison.OrdinalIgnoreCase) && File.Exists(old)) File.Delete(old);
+        File.Move(tmp, Path.Combine(_paths.MonDir, file), overwrite: true);
+        e.File = file;
+        _info.TryRemove(e.Id, out _);
+        Register(pk);
+    }
+
+    /// <summary>Forget the cached summary (after the entry's trip changed).</summary>
+    public void Touch(VaultEntry e) => _info.TryRemove(e.Id, out _);
 
     /// <summary>Undo an <see cref="Add"/> that never got committed.</summary>
     public void Discard(VaultEntry e)
