@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PokeVault's Windows installer. Built on .NET Framework 4.8 (part of every Windows 10/11 PC), so it runs
+       anywhere without installing anything first. With -p:Payload=path\to\app.zip it becomes PokeVault-Setup.exe
+       (the app packed inside); without it, the small Uninstall.exe that the installer leaves behind. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>$(SetupName)</AssemblyName>
+    <SetupName Condition="'$(SetupName)' == ''">PokeVault-Setup</SetupName>
+    <ApplicationIcon>..\pokevault.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Product>PokeVault</Product>
+    <Company>PokeVault</Company>
+    <Description>PokeVault installer</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- 64-bit, so it can see whether the (64-bit) PokeVault is open before replacing it -->
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Payload)' != ''">
+    <EmbeddedResource Include="$(Payload)" LogicalName="app.zip" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Uninstaller)' != ''">
+    <EmbeddedResource Include="$(Uninstaller)" LogicalName="uninstall.exe" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+# Your vault, save backups, uploaded saves and caches: personal data, never commit it.
+data/
+
+# build output
+bin/
+obj/
+
+# editors
+.vs/
+.vscode/
+*.user
+*.suo
+
+# local run notes (may hold a password)
+cmdToRun.txt
+
+# installer output
+dist/
+installer/bin/
+installer/obj/
